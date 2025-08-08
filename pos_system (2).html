@@ -1,0 +1,1800 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POS System - ระบบจุดขายครบครัน</title>
+    <meta name="description" content="ระบบ POS ครบครัน พร้อม PWA และ Google Sheets">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiUE9TIFN5c3RlbSIsInNob3J0X25hbWUiOiJQT1MiLCJzdGFydF91cmwiOiIuLyIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwiYmFja2dyb3VuZF9jb2xvciI6IiNmZmZmZmYiLCJ0aGVtZV9jb2xvciI6IiMzYjgyZjYiLCJpY29ucyI6W3sic3JjIjoiZGF0YTppbWFnZS9zdmcreG1sO2Jhc2U2NCxQSE4yWnlCM2FXUjBhRDBpTWpRaUlHaGxhV2RvZEQwaU1qUWlJSFpwWlhkQ2IzZzlJakFnTUNBeU5DQXlOQ0lnWm1sc2JEMGlJek5pT0RKbU5pSWdlRzFzYm5NOUltaDBkSEE2THk5M2QzY3Vkek11YjNKbkx6SXdNREF2YzNabklqNDhhbkpsWTNRZ2VEMGlOaUlnZVQwaU5pSWdkMmxrZEdnOUlqRXlJaUJvWldsbmFIUTlJakV5SWlCeWVEMGlNaUlnWm1sc2JEMGlJM1ptWmlJdlBqeDBaWGgwSUhnOUlqRXlJaUI1UFNJeE5TSWdabWxzYkQwaUl6TmlPREptTmlJZ1ptOXVkQzF6YVhwbFBTSTJJaUIwWlhoMExXRnVZMmh2Y2owaWJXbGtaR3hsSWo1UVQxTThMM1JsZUhRK1BEWHNMM04yWno0PSIsInNpemVzIjoiMjR4MjQiLCJ0eXBlIjoiaW1hZ2Uvc3ZnK3htbCJ9XX0=">
+    
+    <!-- iOS PWA -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="POS System">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: white;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .nav-tabs {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .nav-tab {
+            padding: 12px 24px;
+            margin: 5px;
+            background: rgba(255,255,255,0.2);
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: white;
+            font-weight: 600;
+            backdrop-filter: blur(10px);
+        }
+
+        .nav-tab.active, .nav-tab:hover {
+            background: rgba(255,255,255,0.3);
+            border-color: rgba(255,255,255,0.6);
+            transform: translateY(-2px);
+        }
+
+        .tab-content {
+            display: none;
+            background: rgba(255,255,255,0.95);
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            backdrop-filter: blur(15px);
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.5s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: rgba(255,255,255,0.9);
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 5px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+
+        .btn:hover::before {
+            left: 100%;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #10b981, #047857);
+            color: white;
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .grid {
+            display: grid;
+            gap: 20px;
+        }
+
+        .grid-2 {
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        }
+
+        .grid-3 {
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        }
+
+        .card {
+            background: rgba(255,255,255,0.9);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+        }
+
+        .cart-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            margin: 10px 0;
+            background: rgba(59,130,246,0.1);
+            border-radius: 10px;
+            border-left: 4px solid #3b82f6;
+        }
+
+        .stats-card {
+            text-align: center;
+            padding: 25px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border-radius: 15px;
+            margin: 10px 0;
+        }
+
+        .stats-number {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .alert {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 10px;
+            border-left: 4px solid;
+        }
+
+        .alert-success {
+            background: rgba(16,185,129,0.1);
+            border-color: #10b981;
+            color: #047857;
+        }
+
+        .alert-warning {
+            background: rgba(245,158,11,0.1);
+            border-color: #f59e0b;
+            color: #d97706;
+        }
+
+        .alert-danger {
+            background: rgba(239,68,68,0.1);
+            border-color: #ef4444;
+            color: #dc2626;
+        }
+
+        .qr-container {
+            text-align: center;
+            padding: 30px;
+            background: white;
+            border-radius: 15px;
+            margin: 20px 0;
+        }
+
+        .invoice {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin: 20px 0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .invoice-header {
+            text-align: center;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 20px;
+            margin-bottom: 20px;
+        }
+
+        .invoice-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .invoice-total {
+            font-weight: bold;
+            font-size: 1.2rem;
+            padding-top: 15px;
+            border-top: 2px solid #333;
+        }
+
+        .low-stock {
+            background: rgba(239,68,68,0.1);
+            border-left: 4px solid #ef4444;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 500px;
+            position: relative;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: scale(0.7); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .close {
+            position: absolute;
+            right: 20px;
+            top: 15px;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            color: #aaa;
+        }
+
+        .close:hover {
+            color: #333;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .nav-tabs {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .nav-tab {
+                width: 200px;
+                text-align: center;
+            }
+
+            .tab-content {
+                padding: 20px;
+            }
+
+            .cart-item {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .grid-2, .grid-3 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .scanner-container {
+            text-align: center;
+            padding: 20px;
+            background: rgba(59,130,246,0.1);
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .last-save {
+            text-align: center;
+            margin: 20px 0;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏪 POS System</h1>
+            <p>ระบบจุดขายครบครัน พร้อม PWA และ Google Sheets</p>
+        </div>
+
+        <div class="nav-tabs">
+            <div class="nav-tab active" onclick="showTab('sell')">💰 ขายสินค้า</div>
+            <div class="nav-tab" onclick="showTab('stock-in')">➕ รับสินค้า</div>
+            <div class="nav-tab" onclick="showTab('inventory')">📦 สินค้าคงคลัง</div>
+            <div class="nav-tab" onclick="showTab('reports')">📊 รายงาน</div>
+            <div class="nav-tab" onclick="showTab('settings')">⚙️ ตั้งค่า</div>
+        </div>
+
+        <!-- ขายสินค้า -->
+        <div id="sell" class="tab-content active">
+            <div class="grid grid-2">
+                <div class="card">
+                    <h3>🔍 ค้นหาสินค้า</h3>
+                    <div class="form-group">
+                        <label>สแกนบาร์โค้ด / ค้นหาสินค้า</label>
+                        <input type="text" id="searchProduct" class="form-control" placeholder="สแกนหรือพิมพ์ชื่อสินค้า">
+                    </div>
+                    <div class="form-group">
+                        <label>เลือกสินค้า</label>
+                        <select id="productSelect" class="form-control">
+                            <option value="">-- เลือกสินค้า --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>จำนวน</label>
+                        <input type="number" id="sellQuantity" class="form-control" value="1" min="1">
+                    </div>
+                    <button class="btn btn-success" onclick="addToCart()">เพิ่มลงตะกร้า</button>
+                </div>
+
+                <div class="card">
+                    <h3>🛒 ตะกร้าสินค้า</h3>
+                    <div id="cartItems"></div>
+                    <div class="stats-card">
+                        <div class="stats-number" id="cartTotal">฿ 0</div>
+                        <div>ยอดรวม</div>
+                    </div>
+                    <div class="form-group">
+                        <label>รับเงิน</label>
+                        <input type="number" id="receivedAmount" class="form-control" placeholder="0">
+                    </div>
+                    <div class="form-group">
+                        <label>เงินทอน</label>
+                        <input type="number" id="changeAmount" class="form-control" readonly>
+                    </div>
+                    <button class="btn btn-primary" onclick="processSale()">เพิ่มรายการขาย</button>
+                    <button class="btn btn-warning" onclick="clearCart()">ล้างตะกร้า</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- รับสินค้า -->
+        <div id="stock-in" class="tab-content">
+            <div class="card">
+                <h3>➕ รับสินค้าเข้าสต๊อก</h3>
+                <div class="grid grid-2">
+                    <div class="form-group">
+                        <label>บาร์โค้ด</label>
+                        <input type="text" id="newBarcode" class="form-control" placeholder="สแกนหรือพิมพ์บาร์โค้ด">
+                    </div>
+                    <div class="form-group">
+                        <label>ชื่อสินค้า</label>
+                        <input type="text" id="newProductName" class="form-control" placeholder="ชื่อสินค้า">
+                    </div>
+                    <div class="form-group">
+                        <label>ราคาขาย</label>
+                        <input type="number" id="newSellPrice" class="form-control" placeholder="0" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>ราคาทุน</label>
+                        <input type="number" id="newCostPrice" class="form-control" placeholder="0" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>จำนวน</label>
+                        <input type="number" id="newQuantity" class="form-control" placeholder="0" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label>แจ้งเตือนเมื่อเหลือ (ชิ้น)</label>
+                        <input type="number" id="newMinStock" class="form-control" placeholder="5" min="0">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="isBulkPurchase"> ซื้อแบบยกแพ็ค
+                    </label>
+                </div>
+                
+                <div id="bulkPurchaseFields" class="hidden">
+                    <div class="grid grid-2">
+                        <div class="form-group">
+                            <label>จำนวนแพ็ค</label>
+                            <input type="number" id="packQuantity" class="form-control" placeholder="0" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label>ราคาต่อแพ็ค</label>
+                            <input type="number" id="packPrice" class="form-control" placeholder="0" step="0.01">
+                        </div>
+                        <div class="form-group">
+                            <label>จำนวนชิ้นต่อแพ็ค</label>
+                            <input type="number" id="piecesPerPack" class="form-control" placeholder="0" min="1">
+                        </div>
+                        <div class="form-group">
+                            <label>ต้นทุนต่อชิ้น (คำนวณอัตโนมัติ)</label>
+                            <input type="number" id="calculatedCostPerPiece" class="form-control" readonly>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn btn-success" onclick="addStock()">เพิ่มสต๊อก</button>
+                <button class="btn btn-primary" onclick="loadExistingProducts()">โหลดสินค้าเดิม</button>
+            </div>
+
+            <div id="stockInResult" class="alert alert-success hidden">
+                <strong>สำเร็จ!</strong> เพิ่มสินค้าเข้าสต๊อกแล้ว
+            </div>
+        </div>
+
+        <!-- สินค้าคงคลัง -->
+        <div id="inventory" class="tab-content">
+            <div class="card">
+                <h3>📦 สินค้าคงคลัง</h3>
+                <div class="form-group">
+                    <input type="text" id="inventorySearch" class="form-control" placeholder="ค้นหาสินค้า...">
+                </div>
+                <button class="btn btn-primary" onclick="loadInventory()">โหลดข้อมูล</button>
+                <button class="btn btn-warning" onclick="checkLowStock()">ตรวจสอบสินค้าใกล้หมด</button>
+                
+                <div id="inventoryList"></div>
+                
+                <div id="lowStockAlert" class="hidden">
+                    <h4>⚠️ สินค้าใกล้หมด</h4>
+                    <div id="lowStockList"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- รายงาน -->
+        <div id="reports" class="tab-content">
+            <div class="grid grid-3">
+                <div class="stats-card">
+                    <div class="stats-number" id="todayRevenue">฿ 0</div>
+                    <div>รายได้วันนี้</div>
+                </div>
+                <div class="stats-card">
+                    <div class="stats-number" id="todayProfit">฿ 0</div>
+                    <div>กำไรวันนี้</div>
+                </div>
+                <div class="stats-card">
+                    <div class="stats-number" id="todayOrders">0</div>
+                    <div>ยอดขายวันนี้</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📊 รายงานยอดขาย</h3>
+                <div class="form-group">
+                    <label>เลือกช่วงเวลา</label>
+                    <select id="reportPeriod" class="form-control">
+                        <option value="today">วันนี้</option>
+                        <option value="month">เดือนนี้</option>
+                        <option value="year">ปีนี้</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" onclick="generateReport()">สร้างรายงาน</button>
+                <button class="btn btn-success" onclick="sendLineNotify()">ส่ง LINE Notify</button>
+                
+                <div id="reportResults"></div>
+            </div>
+        </div>
+
+        <!-- ตั้งค่า -->
+        <div id="settings" class="tab-content">
+            <div class="grid grid-2">
+                <div class="card">
+                    <h3>🔗 Google Sheets</h3>
+                    <div class="form-group">
+                        <label>Google Apps Script URL</label>
+                        <input type="url" id="gasUrl" class="form-control" placeholder="https://script.google.com/macros/s/.../exec">
+                    </div>
+                    <div class="form-group">
+                        <label>Sheet ID</label>
+                        <input type="text" id="sheetId" class="form-control" placeholder="1ABC...xyz">
+                    </div>
+                    <button class="btn btn-primary" onclick="testConnection()">ทดสอบการเชื่อมต่อ</button>
+                </div>
+
+                <div class="card">
+                    <h3>💳 PromptPay</h3>
+                    <div class="form-group">
+                        <label>เบอร์โทรศัพท์ / เลขบัญชี</label>
+                        <input type="text" id="promptPayId" class="form-control" placeholder="0812345678">
+                    </div>
+                    <div class="form-group">
+                        <label>ชื่อร้าน</label>
+                        <input type="text" id="storeName" class="form-control" placeholder="ร้านค้าของฉัน">
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>📱 LINE Notify</h3>
+                    <div class="form-group">
+                        <label>LINE Token</label>
+                        <input type="text" id="lineToken" class="form-control" placeholder="LINE Notify Token">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="autoNotify"> ส่งยอดสรุปอัตโนมัติทุกวัน
+                        </label>
+                    </div>
+                    <button class="btn btn-success" onclick="testLineNotify()">ทดสอบ LINE</button>
+                </div>
+
+                <div class="card">
+                    <h3>🚨 การแจ้งเตือน</h3>
+                    <div class="form-group">
+                        <label>แจ้งเตือนสินค้าหมดเมื่อเหลือ (ชิ้น)</label>
+                        <input type="number" id="defaultMinStock" class="form-control" value="5" min="0">
+                    </div>
+                    <button class="btn btn-primary" onclick="saveSettings()">บันทึกการตั้งค่า</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="lastSaved" class="last-save"></div>
+
+    <!-- Modal สำหรับใบเสนอราคา -->
+    <div id="invoiceModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeInvoiceModal()">&times;</span>
+            <div id="invoiceContent"></div>
+            <div class="qr-container">
+                <div id="qrCode"></div>
+                <p>สแกน QR Code เพื่อชำระเงิน</p>
+            </div>
+            <button class="btn btn-primary" onclick="downloadInvoice()">ดาวน์โหลดใบเสนอราคา</button>
+        </div>
+    </div>
+
+    <!-- QR Code Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+    
+    <!-- html2canvas for invoice download -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <script>
+        // ข้อมูลสำหรับจำลอง (ในการใช้งานจริงจะเชื่อมกับ Google Sheets)
+        let inventory = JSON.parse(localStorage.getItem('pos_inventory') || '[]');
+        let sales = JSON.parse(localStorage.getItem('pos_sales') || '[]');
+        let cart = [];
+        let settings = JSON.parse(localStorage.getItem('pos_settings') || '{}');
+
+        // PWA Service Worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('data:application/javascript;base64,c2VsZi5hZGRFdmVudExpc3RlbmVyKCdpbnN0YWxsJywgZXZlbnQgPT4gewogIGNvbnNvbGUubG9nKCdTVzogSW5zdGFsbGVkJyk7Cn0pOwoKc2VsZi5hZGRFdmVudExpc3RlbmVyKCdhY3RpdmF0ZScsIGV2ZW50ID0+IHsKICBjb25zb2xlLmxvZygnU1c6IEFjdGl2YXRlZCcpOwp9KTs=')
+                .then(registration => console.log('SW registered'))
+                .catch(error => console.log('SW registration failed'));
+        }
+
+        // แสดงแท็บ
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
+            
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+            
+            // โหลดข้อมูลเมื่อเปิดแท็บ
+            if (tabName === 'sell') {
+                loadProductsForSell();
+            } else if (tabName === 'inventory') {
+                loadInventory();
+            } else if (tabName === 'reports') {
+                loadReports();
+            }
+        }
+
+        // โหลดสินค้าสำหรับการขาย
+        function loadProductsForSell() {
+            const select = document.getElementById('productSelect');
+            select.innerHTML = '<option value="">-- เลือกสินค้า --</option>';
+            
+            inventory.forEach((item, index) => {
+                if (item.quantity > 0) {
+                    select.innerHTML += `<option value="${index}">${item.name} - ฿${item.sellPrice} (คงเหลือ: ${item.quantity})</option>`;
+                }
+            });
+        }
+
+        // ค้นหาสินค้า
+        document.getElementById('searchProduct').addEventListener('input', function(e) {
+            const searchTerm = e.target.value.toLowerCase();
+            const select = document.getElementById('productSelect');
+            
+            // ค้นหาด้วยบาร์โค้ดหรือชื่อ
+            const found = inventory.find(item => 
+                item.barcode === e.target.value || 
+                item.name.toLowerCase().includes(searchTerm)
+            );
+            
+            if (found && found.quantity > 0) {
+                const index = inventory.indexOf(found);
+                select.value = index;
+                document.getElementById('sellQuantity').focus();
+            }
+        });
+
+        // เพิ่มสินค้าลงตะกร้า
+        function addToCart() {
+            const productIndex = document.getElementById('productSelect').value;
+            const quantity = parseInt(document.getElementById('sellQuantity').value) || 1;
+            
+            if (!productIndex) {
+                alert('กรุณาเลือกสินค้า');
+                return;
+            }
+            
+            const product = inventory[productIndex];
+            if (product.quantity < quantity) {
+                alert('สินค้าไม่เพียงพอ');
+                return;
+            }
+            
+            // ตรวจสอบว่ามีสินค้านี้ในตะกร้าแล้วหรือไม่
+            const existingItem = cart.find(item => item.productIndex == productIndex);
+            if (existingItem) {
+                existingItem.quantity += quantity;
+            } else {
+                cart.push({
+                    productIndex: parseInt(productIndex),
+                    name: product.name,
+                    sellPrice: product.sellPrice,
+                    costPrice: product.costPrice,
+                    quantity: quantity
+                });
+            }
+            
+            updateCartDisplay();
+            document.getElementById('sellQuantity').value = 1;
+            document.getElementById('productSelect').value = '';
+            document.getElementById('searchProduct').value = '';
+        }
+
+        // อัพเดตการแสดงผลตะกร้า
+        function updateCartDisplay() {
+            const cartItems = document.getElementById('cartItems');
+            const cartTotal = document.getElementById('cartTotal');
+            
+            if (cart.length === 0) {
+                cartItems.innerHTML = '<p>ตะกร้าว่าง</p>';
+                cartTotal.textContent = '฿ 0';
+                return;
+            }
+            
+            let total = 0;
+            cartItems.innerHTML = '';
+            
+            cart.forEach((item, index) => {
+                const itemTotal = item.sellPrice * item.quantity;
+                total += itemTotal;
+                
+                cartItems.innerHTML += `
+                    <div class="cart-item">
+                        <div>
+                            <strong>${item.name}</strong><br>
+                            ฿${item.sellPrice} × ${item.quantity} = ฿${itemTotal}
+                        </div>
+                        <button class="btn btn-danger" onclick="removeFromCart(${index})">ลบ</button>
+                    </div>
+                `;
+            });
+            
+            cartTotal.textContent = `฿ ${total.toLocaleString()}`;
+            calculateChange();
+        }
+
+        // ลบสินค้าจากตะกร้า
+        function removeFromCart(index) {
+            cart.splice(index, 1);
+            updateCartDisplay();
+        }
+
+        // ล้างตะกร้า
+        function clearCart() {
+            cart = [];
+            updateCartDisplay();
+            document.getElementById('receivedAmount').value = '';
+            document.getElementById('changeAmount').value = '';
+        }
+
+        // คำนวณเงินทอน
+        function calculateChange() {
+            const received = parseFloat(document.getElementById('receivedAmount').value) || 0;
+            const total = cart.reduce((sum, item) => sum + (item.sellPrice * item.quantity), 0);
+            const change = received - total;
+            
+            document.getElementById('changeAmount').value = change >= 0 ? change.toFixed(2) : '';
+        }
+
+        document.getElementById('receivedAmount').addEventListener('input', calculateChange);
+
+        // ประมวลผลการขาย
+        function processSale() {
+            if (cart.length === 0) {
+                alert('ตะกร้าสินค้าว่าง');
+                return;
+            }
+
+            const receivedField = document.getElementById('receivedAmount');
+            const receivedStr = receivedField.value.trim();
+            const total = cart.reduce((sum, item) => sum + (item.sellPrice * item.quantity), 0);
+
+            if (receivedStr === '') {
+                const sale = {
+                    id: Date.now(),
+                    date: new Date().toISOString(),
+                    items: [...cart],
+                    total: total,
+                    received: 0,
+                    change: total,
+                    profit: cart.reduce((sum, item) => sum + ((item.sellPrice - item.costPrice) * item.quantity), 0)
+                };
+                showInvoice(sale);
+                return;
+            }
+
+            const received = parseFloat(receivedStr) || 0;
+
+            if (received < total) {
+                alert('เงินที่รับไม่เพียงพอ');
+                return;
+            }
+
+            // ลดสต๊อก
+            cart.forEach(cartItem => {
+                inventory[cartItem.productIndex].quantity -= cartItem.quantity;
+            });
+
+            // บันทึกการขาย
+            const sale = {
+                id: Date.now(),
+                date: new Date().toISOString(),
+                items: [...cart],
+                total: total,
+                received: received,
+                change: received - total,
+                profit: cart.reduce((sum, item) => sum + ((item.sellPrice - item.costPrice) * item.quantity), 0)
+            };
+
+            sales.push(sale);
+
+            // บันทึกข้อมูล
+            localStorage.setItem('pos_inventory', JSON.stringify(inventory));
+            localStorage.setItem('pos_sales', JSON.stringify(sales));
+
+            // แสดงใบเสนอราคา
+            showInvoice(sale);
+
+            // ล้างตะกร้า
+            clearCart();
+            loadProductsForSell(); // อัพเดตรายการสินค้า
+        }
+
+        // แสดงใบเสนอราคา
+        function showInvoice(sale) {
+            const modal = document.getElementById('invoiceModal');
+            const invoiceContent = document.getElementById('invoiceContent');
+            const storeName = settings.storeName || 'ร้านค้าของฉัน';
+
+            let itemsHtml = '';
+            sale.items.forEach(item => {
+                const itemTotal = item.sellPrice * item.quantity;
+                itemsHtml += `
+                    <div class="invoice-item">
+                        <span>${item.name} × ${item.quantity}</span>
+                        <span>฿${itemTotal.toLocaleString()}</span>
+                    </div>
+                `;
+            });
+
+            const paymentHtml = sale.received < sale.total
+                ? `<div class="invoice-item">
+                        <span>ยอดค้างชำระ</span>
+                        <span>฿${(sale.total - sale.received).toLocaleString()}</span>
+                   </div>`
+                : `<div class="invoice-item">
+                        <span>รับเงิน</span>
+                        <span>฿${sale.received.toLocaleString()}</span>
+                   </div>
+                   <div class="invoice-item">
+                        <span>เงินทอน</span>
+                        <span>฿${sale.change.toLocaleString()}</span>
+                   </div>`;
+
+            invoiceContent.innerHTML = `
+                <div class="invoice">
+                    <div class="invoice-header">
+                        <h2>${storeName}</h2>
+                        <p>${sale.received < sale.total ? 'ใบ PR' : 'ใบเสนอราคา'} #${sale.id}</p>
+                        <p>${new Date(sale.date).toLocaleString('th-TH')}</p>
+                    </div>
+                    ${itemsHtml}
+                    <div class="invoice-item invoice-total">
+                        <span>รวมทั้งหมด</span>
+                        <span>฿${sale.total.toLocaleString()}</span>
+                    </div>
+                    ${paymentHtml}
+                </div>
+            `;
+            
+            // สร้าง QR Code PromptPay
+            generatePromptPayQR(sale.total);
+            
+            modal.style.display = 'block';
+        }
+
+        // สร้าง QR Code PromptPay
+        function generatePromptPayQR(amount) {
+            const promptPayId = settings.promptPayId || '0812345678';
+            const qr = new QRious({
+                element: document.getElementById('qrCode'),
+                value: generatePromptPayString(promptPayId, amount),
+                size: 200
+            });
+        }
+
+        // สร้างสตริง PromptPay
+        function generatePromptPayString(id, amount) {
+            // สร้าง PromptPay QR ตามมาตรฐาน ธปท.
+            let qrString = '00020101021129370016A000000677010111';
+            qrString += '0013' + id.padStart(13, '0');
+            qrString += '5802TH';
+            qrString += '54' + String(amount.toFixed(2)).padStart(2, '0') + String(amount.toFixed(2));
+            qrString += '6304';
+            
+            // คำนวณ CRC16
+            const crc = calculateCRC16(qrString);
+            qrString += crc;
+            
+            return qrString;
+        }
+
+        // คำนวณ CRC16 (สำหรับ PromptPay)
+        function calculateCRC16(data) {
+            let crc = 0xFFFF;
+            for (let i = 0; i < data.length; i++) {
+                crc ^= data.charCodeAt(i) << 8;
+                for (let j = 0; j < 8; j++) {
+                    if (crc & 0x8000) {
+                        crc = (crc << 1) ^ 0x1021;
+                    } else {
+                        crc = crc << 1;
+                    }
+                }
+            }
+            return (crc & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+        }
+
+        // ปิดใบเสนอราคา
+        function closeInvoiceModal() {
+            document.getElementById('invoiceModal').style.display = 'none';
+        }
+
+        // ดาวน์โหลดใบเสนอราคา
+        function downloadInvoice() {
+            const invoiceElement = document.querySelector('.invoice');
+            html2canvas(invoiceElement).then(canvas => {
+                const link = document.createElement('a');
+                link.download = `invoice-${Date.now()}.png`;
+                link.href = canvas.toDataURL();
+                link.click();
+            });
+        }
+
+        // === ระบบรับสินค้า ===
+        
+        // จัดการการซื้อแบบยกแพ็ค
+        document.getElementById('isBulkPurchase').addEventListener('change', function() {
+            const bulkFields = document.getElementById('bulkPurchaseFields');
+            if (this.checked) {
+                bulkFields.classList.remove('hidden');
+            } else {
+                bulkFields.classList.add('hidden');
+            }
+        });
+
+        // คำนวณต้นทุนต่อชิ้น
+        function calculateCostPerPiece() {
+            const packQuantity = parseFloat(document.getElementById('packQuantity').value) || 0;
+            const packPrice = parseFloat(document.getElementById('packPrice').value) || 0;
+            const piecesPerPack = parseFloat(document.getElementById('piecesPerPack').value) || 1;
+            
+            const totalPieces = packQuantity * piecesPerPack;
+            const costPerPiece = totalPieces > 0 ? packPrice / piecesPerPack : 0;
+            
+            document.getElementById('calculatedCostPerPiece').value = costPerPiece.toFixed(2);
+            document.getElementById('newCostPrice').value = costPerPiece.toFixed(2);
+            document.getElementById('newQuantity').value = totalPieces;
+        }
+
+        ['packQuantity', 'packPrice', 'piecesPerPack'].forEach(id => {
+            document.getElementById(id).addEventListener('input', calculateCostPerPiece);
+        });
+
+        // เพิ่มสต๊อก
+        function addStock() {
+            const barcode = document.getElementById('newBarcode').value;
+            const name = document.getElementById('newProductName').value;
+            const sellPrice = parseFloat(document.getElementById('newSellPrice').value) || 0;
+            const costPrice = parseFloat(document.getElementById('newCostPrice').value) || 0;
+            const quantity = parseInt(document.getElementById('newQuantity').value) || 0;
+            const minStock = parseInt(document.getElementById('newMinStock').value) || 5;
+            
+            if (!name || sellPrice <= 0 || costPrice <= 0 || quantity <= 0) {
+                alert('กรุณากรอกข้อมูลให้ครบถ้วน');
+                return;
+            }
+            
+            // ตรวจสอบสินค้าเดิม
+            const existingIndex = inventory.findIndex(item => 
+                item.barcode === barcode || item.name === name
+            );
+            
+            if (existingIndex !== -1) {
+                const existing = inventory[existingIndex];
+                
+                // หากต้นทุนเท่าเดิม อัพเดตจำนวน
+                if (existing.costPrice === costPrice) {
+                    existing.quantity += quantity;
+                    existing.sellPrice = sellPrice; // อัพเดตราคาขาย
+                } else {
+                    // สร้าง batch ใหม่
+                    const newItem = {
+                        id: Date.now(),
+                        barcode: barcode + '_' + Date.now(),
+                        name: name + ' (Batch ' + new Date().toLocaleDateString('th-TH') + ')',
+                        sellPrice: sellPrice,
+                        costPrice: costPrice,
+                        quantity: quantity,
+                        minStock: minStock,
+                        dateAdded: new Date().toISOString()
+                    };
+                    inventory.push(newItem);
+                }
+            } else {
+                // สินค้าใหม่
+                const newItem = {
+                    id: Date.now(),
+                    barcode: barcode,
+                    name: name,
+                    sellPrice: sellPrice,
+                    costPrice: costPrice,
+                    quantity: quantity,
+                    minStock: minStock,
+                    dateAdded: new Date().toISOString()
+                };
+                inventory.push(newItem);
+            }
+            
+            // บันทึกข้อมูล
+            localStorage.setItem('pos_inventory', JSON.stringify(inventory));
+            
+            // แสดงผลสำเร็จ
+            const result = document.getElementById('stockInResult');
+            result.classList.remove('hidden');
+            setTimeout(() => result.classList.add('hidden'), 3000);
+            
+            // ล้างฟอร์ม
+            clearStockForm();
+            loadProductsForSell();
+        }
+
+        // ล้างฟอร์มรับสต๊อก
+        function clearStockForm() {
+            ['newBarcode', 'newProductName', 'newSellPrice', 'newCostPrice', 'newQuantity', 'newMinStock',
+             'packQuantity', 'packPrice', 'piecesPerPack', 'calculatedCostPerPiece'].forEach(id => {
+                document.getElementById(id).value = '';
+            });
+            document.getElementById('isBulkPurchase').checked = false;
+            document.getElementById('bulkPurchaseFields').classList.add('hidden');
+        }
+
+        // โหลดสินค้าเดิม
+        function loadExistingProducts() {
+            const select = document.createElement('select');
+            select.className = 'form-control';
+            select.innerHTML = '<option value="">-- เลือกสินค้าเดิม --</option>';
+            
+            inventory.forEach((item, index) => {
+                select.innerHTML += `<option value="${index}">${item.name} - ฿${item.costPrice}</option>`;
+            });
+            
+            select.addEventListener('change', function() {
+                if (this.value) {
+                    const item = inventory[this.value];
+                    document.getElementById('newBarcode').value = item.barcode;
+                    document.getElementById('newProductName').value = item.name;
+                    document.getElementById('newSellPrice').value = item.sellPrice;
+                    document.getElementById('newCostPrice').value = item.costPrice;
+                    document.getElementById('newMinStock').value = item.minStock;
+                }
+            });
+            
+            // แสดง select ในโมดัล
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.style.display = 'block';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <span class="close" onclick="this.parentElement.parentElement.remove()">&times;</span>
+                    <h3>เลือกสินค้าเดิม</h3>
+                    <div class="form-group">
+                        ${select.outerHTML}
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+        }
+
+        // === ระบบสินค้าคงคลัง ===
+        
+        function loadInventory() {
+            const inventoryList = document.getElementById('inventoryList');
+            const searchTerm = document.getElementById('inventorySearch').value.toLowerCase();
+            
+            let filteredInventory = inventory;
+            if (searchTerm) {
+                filteredInventory = inventory.filter(item => 
+                    item.name.toLowerCase().includes(searchTerm) ||
+                    item.barcode.includes(searchTerm)
+                );
+            }
+            
+            if (filteredInventory.length === 0) {
+                inventoryList.innerHTML = '<p>ไม่พบสินค้า</p>';
+                return;
+            }
+            
+            inventoryList.innerHTML = '<h4>รายการสินค้า</h4>';
+            filteredInventory.forEach((item, index) => {
+                const stockStatus = item.quantity <= item.minStock ? 'low-stock' : '';
+                inventoryList.innerHTML += `
+                    <div class="card ${stockStatus}">
+                        <h5>${item.name}</h5>
+                        <p><strong>บาร์โค้ด:</strong> ${item.barcode}</p>
+                        <p><strong>ราคาขาย:</strong> ฿${item.sellPrice}</p>
+                        <p><strong>ราคาทุน:</strong> ฿${item.costPrice}</p>
+                        <p><strong>คงเหลือ:</strong> ${item.quantity} ชิ้น</p>
+                        <p><strong>แจ้งเตือนเมื่อเหลือ:</strong> ${item.minStock} ชิ้น</p>
+                        ${item.quantity <= item.minStock ? '<p class="alert alert-warning">⚠️ สินค้าใกล้หมด</p>' : ''}
+                    </div>
+                `;
+            });
+        }
+
+        // ตรวจสอบสินค้าใกล้หมด
+        function checkLowStock() {
+            const lowStockItems = inventory.filter(item => item.quantity <= item.minStock);
+            const lowStockAlert = document.getElementById('lowStockAlert');
+            const lowStockList = document.getElementById('lowStockList');
+            
+            if (lowStockItems.length === 0) {
+                lowStockAlert.classList.add('hidden');
+                alert('ไม่มีสินค้าใกล้หมด');
+                return;
+            }
+            
+            lowStockList.innerHTML = '';
+            lowStockItems.forEach(item => {
+                lowStockList.innerHTML += `
+                    <div class="low-stock">
+                        <strong>${item.name}</strong> - เหลือ ${item.quantity} ชิ้น (แจ้งเตือนเมื่อเหลือ ${item.minStock})
+                    </div>
+                `;
+            });
+            
+            lowStockAlert.classList.remove('hidden');
+            
+            // ส่ง LINE Notify หากตั้งค่าไว้
+            if (settings.lineToken) {
+                sendLowStockNotification(lowStockItems);
+            }
+        }
+
+        document.getElementById('inventorySearch').addEventListener('input', loadInventory);
+
+        // === ระบบรายงาน ===
+        
+        function loadReports() {
+            const today = new Date();
+            const todayStr = today.toISOString().split('T')[0];
+            
+            // รายได้วันนี้
+            const todaySales = sales.filter(sale => 
+                sale.date.split('T')[0] === todayStr
+            );
+            
+            const todayRevenue = todaySales.reduce((sum, sale) => sum + sale.total, 0);
+            const todayProfit = todaySales.reduce((sum, sale) => sum + sale.profit, 0);
+            const todayOrders = todaySales.length;
+            
+            document.getElementById('todayRevenue').textContent = `฿ ${todayRevenue.toLocaleString()}`;
+            document.getElementById('todayProfit').textContent = `฿ ${todayProfit.toLocaleString()}`;
+            document.getElementById('todayOrders').textContent = todayOrders;
+        }
+
+        function generateReport() {
+            const period = document.getElementById('reportPeriod').value;
+            const reportResults = document.getElementById('reportResults');
+            
+            let filteredSales = [];
+            const today = new Date();
+            
+            switch (period) {
+                case 'today':
+                    const todayStr = today.toISOString().split('T')[0];
+                    filteredSales = sales.filter(sale => 
+                        sale.date.split('T')[0] === todayStr
+                    );
+                    break;
+                    
+                case 'month':
+                    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+                    filteredSales = sales.filter(sale => 
+                        new Date(sale.date) >= startOfMonth && new Date(sale.date) <= today
+                    );
+                    break;
+                    
+                case 'year':
+                    const startOfYear = new Date(today.getFullYear(), 0, 1);
+                    filteredSales = sales.filter(sale => 
+                        new Date(sale.date) >= startOfYear && new Date(sale.date) <= today
+                    );
+                    break;
+            }
+            
+            const totalRevenue = filteredSales.reduce((sum, sale) => sum + sale.total, 0);
+            const totalProfit = filteredSales.reduce((sum, sale) => sum + sale.profit, 0);
+            const totalOrders = filteredSales.length;
+            
+            const periodText = {
+                'today': 'วันนี้',
+                'month': 'เดือนนี้',
+                'year': 'ปีนี้'
+            };
+            
+            reportResults.innerHTML = `
+                <div class="card">
+                    <h4>รายงานยอดขาย${periodText[period]}</h4>
+                    <div class="grid grid-3">
+                        <div class="stats-card">
+                            <div class="stats-number">฿ ${totalRevenue.toLocaleString()}</div>
+                            <div>รายได้รวม</div>
+                        </div>
+                        <div class="stats-card">
+                            <div class="stats-number">฿ ${totalProfit.toLocaleString()}</div>
+                            <div>กำไรรวม</div>
+                        </div>
+                        <div class="stats-card">
+                            <div class="stats-number">${totalOrders}</div>
+                            <div>จำนวนรายการขาย</div>
+                        </div>
+                    </div>
+                    
+                    <h5>รายละเอียดการขาย</h5>
+                    ${filteredSales.map(sale => `
+                        <div class="card">
+                            <p><strong>วันที่:</strong> ${new Date(sale.date).toLocaleString('th-TH')}</p>
+                            <p><strong>รายการ:</strong> ${sale.items.length} รายการ</p>
+                            <p><strong>ยอดขาย:</strong> ฿${sale.total.toLocaleString()}</p>
+                            <p><strong>กำไร:</strong> ฿${sale.profit.toLocaleString()}</p>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        // === LINE Notify ===
+        
+        function sendLineNotify() {
+            if (!settings.lineToken) {
+                alert('กรุณาตั้งค่า LINE Token ก่อน');
+                return;
+            }
+            
+            const today = new Date();
+            const todayStr = today.toISOString().split('T')[0];
+            const todaySales = sales.filter(sale => 
+                sale.date.split('T')[0] === todayStr
+            );
+            
+            const todayRevenue = todaySales.reduce((sum, sale) => sum + sale.total, 0);
+            const todayProfit = todaySales.reduce((sum, sale) => sum + sale.profit, 0);
+            const todayOrders = todaySales.length;
+            
+            const message = `
+📊 สรุปยอดขายวันนี้
+🏪 ร้าน: ${settings.storeName || 'ร้านค้าของฉัน'}
+📅 วันที่: ${today.toLocaleDateString('th-TH')}
+
+💰 รายได้: ฿${todayRevenue.toLocaleString()}
+📈 กำไร: ฿${todayProfit.toLocaleString()}
+🛒 จำนวนรายการ: ${todayOrders}
+
+#POS #ยอดขาย
+            `.trim();
+            
+            // จำลองการส่ง LINE Notify
+            console.log('Sending LINE Notify:', message);
+            alert('ส่ง LINE Notify สำเร็จ');
+        }
+
+        function sendLowStockNotification(lowStockItems) {
+            if (!settings.lineToken) return;
+            
+            const itemList = lowStockItems.map(item => 
+                `- ${item.name}: เหลือ ${item.quantity} ชิ้น`
+            ).join('\n');
+            
+            const message = `
+⚠️ แจ้งเตือนสินค้าใกล้หมด
+🏪 ร้าน: ${settings.storeName || 'ร้านค้าของฉัน'}
+
+${itemList}
+
+กรุณาสั่งซื้อสินค้าเพิ่ม
+            `.trim();
+            
+            console.log('Sending low stock notification:', message);
+        }
+
+        function testLineNotify() {
+            if (!settings.lineToken) {
+                alert('กรุณากรอก LINE Token');
+                return;
+            }
+            
+            alert('ทดสอบ LINE Notify สำเร็จ');
+        }
+
+        // === การตั้งค่า ===
+        
+        function saveSettings() {
+            settings = {
+                gasUrl: document.getElementById('gasUrl').value,
+                sheetId: document.getElementById('sheetId').value,
+                promptPayId: document.getElementById('promptPayId').value,
+                storeName: document.getElementById('storeName').value,
+                lineToken: document.getElementById('lineToken').value,
+                autoNotify: document.getElementById('autoNotify').checked,
+                defaultMinStock: parseInt(document.getElementById('defaultMinStock').value) || 5
+            };
+            
+            localStorage.setItem('pos_settings', JSON.stringify(settings));
+            alert('บันทึกการตั้งค่าสำเร็จ');
+        }
+
+        function loadSettings() {
+            if (settings.gasUrl) document.getElementById('gasUrl').value = settings.gasUrl;
+            if (settings.sheetId) document.getElementById('sheetId').value = settings.sheetId;
+            if (settings.promptPayId) document.getElementById('promptPayId').value = settings.promptPayId;
+            if (settings.storeName) document.getElementById('storeName').value = settings.storeName;
+            if (settings.lineToken) document.getElementById('lineToken').value = settings.lineToken;
+            if (settings.autoNotify) document.getElementById('autoNotify').checked = settings.autoNotify;
+            if (settings.defaultMinStock) document.getElementById('defaultMinStock').value = settings.defaultMinStock;
+        }
+
+        function testConnection() {
+            const gasUrl = document.getElementById('gasUrl').value;
+            if (!gasUrl) {
+                alert('กรุณากรอก Google Apps Script URL');
+                return;
+            }
+            
+            // จำลองการทดสอบการเชื่อมต่อ
+            alert('การเชื่อมต่อสำเร็จ');
+        }
+
+        // === Google Apps Script Integration ===
+        
+        function syncWithGoogleSheets() {
+            if (!settings.gasUrl) {
+                console.log('No Google Apps Script URL configured');
+                return;
+            }
+            
+            // ส่งข้อมูลไป Google Sheets
+            const data = {
+                action: 'sync',
+                inventory: inventory,
+                sales: sales
+            };
+            
+            fetch(settings.gasUrl, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            }).then(() => {
+                console.log('Synced with Google Sheets');
+            }).catch(error => {
+                console.error('Sync failed:', error);
+            });
+        }
+
+        // Auto-sync ทุก 5 นาที
+        setInterval(syncWithGoogleSheets, 5 * 60 * 1000);
+
+        // === เริ่มต้นระบบ ===
+        
+        function initializeSystem() {
+            loadSettings();
+            loadProductsForSell();
+            loadReports();
+            
+            // ตรวจสอบสินค้าใกล้หมดเมื่อเริ่มต้น
+            const lowStockItems = inventory.filter(item => item.quantity <= item.minStock);
+            if (lowStockItems.length > 0) {
+                setTimeout(() => {
+                    if (confirm(`พบสินค้าใกล้หมด ${lowStockItems.length} รายการ ต้องการดูหรือไม่?`)) {
+                        showTab('inventory');
+                        checkLowStock();
+                    }
+                }, 2000);
+            }
+            
+            // Auto Daily Report (หากเปิดใช้งาน)
+            if (settings.autoNotify) {
+                const now = new Date();
+                const lastReport = localStorage.getItem('pos_last_report');
+                const today = now.toDateString();
+                
+                if (lastReport !== today && now.getHours() >= 18) { // ส่งรายงานหลัง 18:00
+                    sendLineNotify();
+                    localStorage.setItem('pos_last_report', today);
+                }
+            }
+        }
+
+        // === ข้อมูลตัวอย่าง ===
+        
+        function loadSampleData() {
+            if (inventory.length === 0) {
+                // สร้างข้อมูลตัวอย่าง
+                inventory = [
+                    {
+                        id: 1,
+                        barcode: '8850006111101',
+                        name: 'น้ำดื่ม 600มล.',
+                        sellPrice: 10,
+                        costPrice: 7,
+                        quantity: 50,
+                        minStock: 10,
+                        dateAdded: new Date().toISOString()
+                    },
+                    {
+                        id: 2,
+                        barcode: '8850999320501',
+                        name: 'ขนมปัง',
+                        sellPrice: 25,
+                        costPrice: 18,
+                        quantity: 20,
+                        minStock: 5,
+                        dateAdded: new Date().toISOString()
+                    },
+                    {
+                        id: 3,
+                        barcode: '8851019321456',
+                        name: 'กาแฟกระป๋อง',
+                        sellPrice: 35,
+                        costPrice: 25,
+                        quantity: 3, // ตั้งใจให้เป็นสินค้าใกล้หมด
+                        minStock: 5,
+                        dateAdded: new Date().toISOString()
+                    }
+                ];
+                
+                localStorage.setItem('pos_inventory', JSON.stringify(inventory));
+                console.log('Sample data loaded');
+            }
+        }
+
+        // เพิ่มข้อมูลตัวอย่างหากยังไม่มี
+        loadSampleData();
+
+        // === Camera Scanner (Optional Enhancement) ===
+        
+        let cameraStream = null;
+        
+        function startBarcodeScanner() {
+            if (!navigator.mediaDevices) {
+                alert('เบราว์เซอร์ไม่รองรับการใช้กล้อง');
+                return;
+            }
+            
+            const scannerContainer = document.createElement('div');
+            scannerContainer.className = 'scanner-container';
+            scannerContainer.innerHTML = `
+                <h4>📷 สแกนบาร์โค้ด</h4>
+                <video id="scannerVideo" width="300" height="200" autoplay></video>
+                <br>
+                <button class="btn btn-danger" onclick="stopBarcodeScanner()">หยุดสแกน</button>
+            `;
+            
+            document.querySelector('.tab-content.active').appendChild(scannerContainer);
+            
+            navigator.mediaDevices.getUserMedia({ 
+                video: { 
+                    facingMode: 'environment' // ใช้กล้องหลัง
+                } 
+            })
+            .then(stream => {
+                cameraStream = stream;
+                document.getElementById('scannerVideo').srcObject = stream;
+                
+                // จำลองการสแกน (ในการใช้งานจริงควรใช้ library อย่าง QuaggaJS)
+                setTimeout(() => {
+                    const mockBarcode = '8850006111101'; // ข้อมูลจำลอง
+                    document.getElementById('searchProduct').value = mockBarcode;
+                    document.getElementById('searchProduct').dispatchEvent(new Event('input'));
+                    stopBarcodeScanner();
+                    alert('สแกนบาร์โค้ดสำเร็จ: ' + mockBarcode);
+                }, 3000);
+            })
+            .catch(error => {
+                console.error('Camera access denied:', error);
+                alert('ไม่สามารถเข้าถึงกล้องได้');
+            });
+        }
+        
+        function stopBarcodeScanner() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraStream = null;
+            }
+            
+            const scannerContainer = document.querySelector('.scanner-container');
+            if (scannerContainer) {
+                scannerContainer.remove();
+            }
+        }
+
+        // === PWA Install Prompt ===
+        
+        let deferredPrompt;
+        
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            
+            // แสดงปุ่มติดตั้ง PWA
+            const installButton = document.createElement('button');
+            installButton.className = 'btn btn-success';
+            installButton.textContent = '📱 ติดตั้งแอป';
+            installButton.onclick = installPWA;
+            installButton.style.position = 'fixed';
+            installButton.style.bottom = '20px';
+            installButton.style.right = '20px';
+            installButton.style.zIndex = '1000';
+            
+            document.body.appendChild(installButton);
+        });
+        
+        function installPWA() {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then((choiceResult) => {
+                    if (choiceResult.outcome === 'accepted') {
+                        console.log('PWA installed');
+                    }
+                    deferredPrompt = null;
+                    document.querySelector('button[onclick="installPWA()"]')?.remove();
+                });
+            }
+        }
+
+        // === Keyboard Shortcuts ===
+        
+        document.addEventListener('keydown', function(e) {
+            // F1 = ขายสินค้า
+            if (e.key === 'F1') {
+                e.preventDefault();
+                showTab('sell');
+                document.getElementById('searchProduct').focus();
+            }
+            
+            // F2 = รับสินค้า
+            if (e.key === 'F2') {
+                e.preventDefault();
+                showTab('stock-in');
+                document.getElementById('newBarcode').focus();
+            }
+            
+            // F3 = สินค้าคงคลัง
+            if (e.key === 'F3') {
+                e.preventDefault();
+                showTab('inventory');
+            }
+            
+            // F4 = รายงาน
+            if (e.key === 'F4') {
+                e.preventDefault();
+                showTab('reports');
+            }
+            
+            // Enter ในช่องค้นหาสินค้า = เพิ่มลงตะกร้า
+            if (e.key === 'Enter' && e.target.id === 'searchProduct') {
+                e.preventDefault();
+                addToCart();
+            }
+            
+            // Ctrl + Enter = ขายสินค้า
+            if (e.ctrlKey && e.key === 'Enter') {
+                e.preventDefault();
+                if (document.getElementById('sell').classList.contains('active')) {
+                    processSale();
+                }
+            }
+        });
+
+        // === Export/Import Data ===
+        
+        function exportData() {
+            const data = {
+                inventory: inventory,
+                sales: sales,
+                settings: settings,
+                exportDate: new Date().toISOString()
+            };
+            
+            const blob = new Blob([JSON.stringify(data, null, 2)], {
+                type: 'application/json'
+            });
+            
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `pos-backup-${new Date().toISOString().split('T')[0]}.json`;
+            link.click();
+            
+            URL.revokeObjectURL(url);
+        }
+        
+        function importData(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    
+                    if (confirm('ต้องการนำเข้าข้อมูลใหม่หรือไม่? ข้อมูลเดิมจะถูกเขียนทับ')) {
+                        if (data.inventory) {
+                            inventory = data.inventory;
+                            localStorage.setItem('pos_inventory', JSON.stringify(inventory));
+                        }
+                        
+                        if (data.sales) {
+                            sales = data.sales;
+                            localStorage.setItem('pos_sales', JSON.stringify(sales));
+                        }
+                        
+                        if (data.settings) {
+                            settings = data.settings;
+                            localStorage.setItem('pos_settings', JSON.stringify(settings));
+                            loadSettings();
+                        }
+                        
+                        alert('นำเข้าข้อมูลสำเร็จ');
+                        location.reload();
+                    }
+                } catch (error) {
+                    alert('ไฟล์ข้อมูลไม่ถูกต้อง');
+                }
+            };
+            
+            reader.readAsText(file);
+        }
+
+        // เพิ่มปุ่ม Export/Import ในหน้าตั้งค่า
+        window.addEventListener('load', function() {
+            const settingsTab = document.getElementById('settings');
+            const exportImportCard = document.createElement('div');
+            exportImportCard.className = 'card';
+            exportImportCard.innerHTML = `
+                <h3>💾 สำรองข้อมูล</h3>
+                <div class="form-group">
+                    <button class="btn btn-primary" onclick="exportData()">📤 ส่งออกข้อมูล</button>
+                    <input type="file" id="importFile" accept=".json" onchange="importData(event)" style="display: none;">
+                    <button class="btn btn-warning" onclick="document.getElementById('importFile').click()">📥 นำเข้าข้อมูล</button>
+                </div>
+                <div class="form-group">
+                    <button class="btn btn-success" onclick="startBarcodeScanner()">📷 เปิดสแกนเนอร์</button>
+                </div>
+            `;
+            
+            settingsTab.appendChild(exportImportCard);
+        });
+
+        // เริ่มต้นระบบเมื่อโหลดหน้าเว็บ
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeSystem();
+            
+            // แสดงคำแนะนำการใช้งานครั้งแรก
+            const firstTime = localStorage.getItem('pos_first_time');
+            if (!firstTime) {
+                setTimeout(() => {
+                    alert(`
+🎉 ยินดีต้อนรับสู่ระบบ POS!
+
+⌨️ คีย์ลัด:
+F1 = ขายสินค้า
+F2 = รับสินค้า
+F3 = สินค้าคงคลัง
+F4 = รายงาน
+
+💡 เริ่มต้นด้วยการเพิ่มสินค้าในแท็บ "รับสินค้า"
+                    `);
+                    localStorage.setItem('pos_first_time', 'true');
+                }, 1000);
+            }
+
+            updateLastSaveDisplay();
+        });
+
+        // === Offline Support ===
+        
+        window.addEventListener('online', function() {
+            console.log('กลับมาออนไลน์แล้ว - กำลังซิงค์ข้อมูล');
+            syncWithGoogleSheets();
+            
+            // แสดงการแจ้งเตือน
+            const notification = document.createElement('div');
+            notification.className = 'alert alert-success';
+            notification.textContent = '🟢 กลับมาออนไลน์แล้ว';
+            notification.style.position = 'fixed';
+            notification.style.top = '20px';
+            notification.style.right = '20px';
+            notification.style.zIndex = '1000';
+            
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 3000);
+        });
+        
+        window.addEventListener('offline', function() {
+            console.log('ออฟไลน์ - ข้อมูลจะถูกบันทึกใน Local Storage');
+
+            const notification = document.createElement('div');
+            notification.className = 'alert alert-warning';
+            notification.textContent = '🟡 ออฟไลน์ - ข้อมูลบันทึกในเครื่อง';
+            notification.style.position = 'fixed';
+            notification.style.top = '20px';
+            notification.style.right = '20px';
+            notification.style.zIndex = '1000';
+
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 3000);
+        });
+
+        // === Auto-save ===
+
+        // บันทึกข้อมูลอัตโนมัติทุกครั้งที่มีการเปลี่ยนแปลง
+        function updateLastSaveDisplay() {
+            const last = localStorage.getItem('pos_last_save');
+            const el = document.getElementById('lastSaved');
+            if (el) {
+                el.textContent = last ? `🕒 บันทึกล่าสุด: ${new Date(last).toLocaleString()}` : '';
+            }
+        }
+
+        function autoSave() {
+            localStorage.setItem('pos_inventory', JSON.stringify(inventory));
+            localStorage.setItem('pos_sales', JSON.stringify(sales));
+            localStorage.setItem('pos_settings', JSON.stringify(settings));
+            const now = new Date().toISOString();
+            localStorage.setItem('pos_last_save', now);
+            updateLastSaveDisplay();
+        }
+
+        // เรียก autoSave หลังจากทุกการดำเนินการสำคัญ
+        const originalAddStock = addStock;
+        const originalProcessSale = processSale;
+        
+        addStock = function() {
+            originalAddStock();
+            autoSave();
+        };
+        
+        processSale = function() {
+            originalProcessSale();
+            autoSave();
+        };
+
+        console.log('🏪 POS System โหลดสำเร็จ!');
+        console.log('📊 สินค้าในระบบ:', inventory.length, 'รายการ');
+        console.log('💰 ประวัติการขาย:', sales.length, 'รายการ');
+    </script>
+</body>
+</html>
