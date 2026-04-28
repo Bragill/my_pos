@@ -1,1 +1,16 @@
+node_modules/
+dist/
+build/
+.vs/
+.serena/
+.playwright-mcp/
+out.txt
+err.txt
+frontend_out.txt
+future-agi/
+GitNexus/
 .aider*
+*.png
+*.zip
+*.bat
+ngrok.exe
