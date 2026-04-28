@@ -1,0 +1,121 @@
+{
+  "project": "POS System - VPS Deployment Restructure for Oracle Cloud Always Free",
+  "version": "1.0.0",
+  "language": "th-TH",
+  "scope": "Restructure project for multi-VM deployment on Oracle Cloud Always Free Tier",
+  "status": "PRIVATE (prepare for future public access)",
+  "principle": "100% Free tier only, production-ready architecture, easy to go public later",
+  "oracle_cloud_always_free_resources": {
+    "note": "These are LIFETIME FREE resources from Oracle Cloud — never expire",
+    "compute": {
+      "arm_instances": {
+        "total": "4 OCPU + 24 GB RAM (Ampere A1)",
+        "note": "Can split into up to 4 VMs or use as 1 large VM",
+        "os": "Oracle Linux 8 or Ubuntu 22.04 (Canonical)"
+      },
+      "amd_instances": {
+        "total": "2 VMs x (1/8 OCPU + 1 GB RAM) AMD Micro",
+        "note": "Very limited — use for lightweight tasks only"
+      }
+    },
+    "storage": {
+      "boot_volumes": "200 GB total (across all VMs)",
+      "block_volumes": "2 Block Volumes, 200 GB total",
+      "object_storage": "10 GB free (Standard tier) + 10 GB (Infrequent Access)",
+      "note": "Object Storage replaces Cloudflare R2 for image/file storage"
+    },
+    "networking": {
+      "vcn": "2 VCNs, 6 subnets each",
+      "load_balancer": "1 Flexible Load Balancer (10 Mbps) — FREE",
+      "outbound_data": "10 TB/month — FREE",
+      "public_ips": "Up to 4 reserved public IPs",
+      "dns": "Oracle DNS zones — FREE"
+    },
+    "database": {
+      "autonomous_db": "2 Autonomous Databases (20 GB each) — FREE",
+      "note": "Oracle Autonomous DB is managed — auto-patching, auto-backup. Supports SQL (Oracle dialect or APEX). Alternative: self-host PostgreSQL on VM"
+    },
+    "extras": {
+      "vault": "20 keys, 150 secrets — FREE",
+      "monitoring": "500 million ingestion datapoints — FREE",
+      "notifications": "1 million sent per month — FREE",
+      "logging": "10 GB/month — FREE"
+    }
+  },
+  "vm_allocation_plan": {
+    "strategy": "Split Ampere A1 (4 OCPU + 24 GB) into 3 VMs + use 1 AMD Micro",
+    "vms": [
+      {
+        "name": "vm-frontend",
+        "role": "Frontend (Next.js / Static site)",
+        "shape": "VM.Standard.A1.Flex (ARM)",
+        "ocpu": 1,
+        "ram_gb": 4,
+        "boot_volume_gb": 47,
+        "os": "Ubuntu 22.04 ARM",
+        "private_ip": "10.0.1.10",
+        "public_ip": "Yes (reserved)",
+        "services": ["Next.js (SSR) or Nginx (static export)", "Node.js 20"],
+        "ports_open": [443, 80],
+        "future_public": "This VM serves the public website"
+      },
+      {
+        "name": "vm-backend",
+        "role": "Backend API + OCR Workers + Queue",
+        "shape": "VM.Standard.A1.Flex (ARM)",
+        "ocpu": 2,
+        "ram_gb": 14,
+        "boot_volume_gb": 47,
+        "os": "Ubuntu 22.04 ARM",
+        "private_ip": "10.0.2.10",
+        "public_ip": "Yes (reserved, but behind LB in future)",
+        "services": [
+          "Express API (Node.js 20)",
+          "OCR processing (Gemini API / Ollama if RAM allows)",
+          "Queue (p-queue in-process, upgrade to BullMQ + Redis later)",
+          "Puppeteer (PDF generation)"
+        ],
+        "ports_open": [3000],
+        "security": "Only accessible from vm-frontend and vm-lb (not public directly in future)"
+      },
+      {
+        "name": "vm-database",
+        "role": "Database server",
+        "shape": "VM.Standard.A1.Flex (ARM)",
+        "ocpu": 1,
+        "ram_gb": 6,
+        "boot_volume_gb": 47,
+        "block_volume_gb": 150,
+        "os": "Ubuntu 22.04 ARM",
+        "private_ip": "10.0.3.10",
+        "public_ip": "NO — private subnet only",
+        "services": [
+          "PostgreSQL 16 (migrate from SQLite)",
+          "Redis 7 (for future BullMQ queue)",
+          "Automated backup via pg_dump → Object Storage"
+        ],
+        "ports_open_internal": [5432, 6379],
+        "ports_open_external": [],
+        "security": "Only accessible from vm-backend via private subnet"
+      },
+      {
+        "name": "vm-monitor",
+        "role": "Monitoring & utilities (Uptime, VPN, Management)",
+        "shape": "VM.Standard.E2.1.Micro (AMD)",
+        "ocpu": 0.125,
+        "ram_gb": 1,
+        "boot_volume_gb": 47,
+        "os": "Ubuntu 22.04 x86_64",
+        "private_ip": "10.0.4.10",
+        "public_ip": "Yes",
+        "services": [
+          "Uptime Kuma (Service monitoring)",
+          "WireGuard VPN (Secure access to private subnets)",
+          "Nginx Proxy Manager (Internal routing)"
+        ],
+        "ports_open": [80, 443, 51820],
+        "security": "Acts as a jump-box/gateway for admin tasks"
+      }
+    ]
+  }
+}

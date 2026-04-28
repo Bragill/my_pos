@@ -1,0 +1,258 @@
+﻿import { useState, useEffect } from 'react';
+import { formatCurrency, formatShortDate } from '../utils/format';
+import api from '../services/api';
+
+const GRAD = 'linear-gradient(to left,#3300FC,#95008A,#EB0000)';
+const PAY_LABEL = { cash: '💵 เงินสด', credit_card: '💳 บัตรเครดิต', qr_promptpay: '📱 QR/PromptPay' };
+
+export default function DashboardPage() {
+  const [dashboard, setDashboard] = useState(null);
+  const [dailySales, setDailySales] = useState([]);
+  const [topProducts, setTopProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [dayOrders, setDayOrders] = useState([]);
+  const [dayLoading, setDayLoading] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [orderDetail, setOrderDetail] = useState(null);
+  const [orderLoading, setOrderLoading] = useState(false);
+
+  useEffect(() => { loadDashboard(); }, []);
+
+  const loadDashboard = async () => {
+    try {
+      const [dashRes, salesRes, topRes] = await Promise.all([
+        api.get('/reports/dashboard'),
+        api.get('/reports/daily-sales', { params: { days: 7 } }),
+        api.get('/reports/top-products', { params: { limit: 5 } }),
+      ]);
+      setDashboard(dashRes.data.data);
+      setDailySales(salesRes.data.data);
+      setTopProducts(topRes.data.data);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  };
+
+  const handleDayClick = async (day) => {
+    setSelectedDate(day);
+    setSelectedOrder(null);
+    setOrderDetail(null);
+    setDayLoading(true);
+    try {
+      const res = await api.get('/orders', {
+        params: { date_from: day.date + ' 00:00:00', date_to: day.date + ' 23:59:59', status: 'completed', limit: 100 },
+      });
+      setDayOrders(res.data.data);
+    } catch { setDayOrders([]); }
+    finally { setDayLoading(false); }
+  };
+
+  const handleOrderClick = async (order) => {
+    setSelectedOrder(order);
+    setOrderLoading(true);
+    try {
+      const res = await api.get('/orders/' + order.id);
+      setOrderDetail(res.data.data);
+    } catch { setOrderDetail(null); }
+    finally { setOrderLoading(false); }
+  };
+
+  if (loading) return <div className="flex items-center justify-center h-64 text-gray-400">⏳ กำลังโหลด...</div>;
+
+  return (
+    <div className="p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)]">
+      <h1 className="text-2xl font-bold text-gray-800 mb-5">📊 แดชบอร์ด</h1>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        {[
+          { title: 'ยอดขายวันนี้',   value: formatCurrency(dashboard?.today_sales || 0), icon: '💰' },
+          { title: 'บิลวันนี้',       value: dashboard?.today_orders || 0,                icon: '🧾' },
+          { title: 'ยอดขายเดือนนี้', value: formatCurrency(dashboard?.month_sales || 0), icon: '📈' },
+          { title: 'สินค้าใกล้หมด',  value: dashboard?.low_stock_count || 0,             icon: '⚠️' },
+        ].map((c) => (
+          <div key={c.title} className="card relative overflow-hidden">
+            <p className="text-xs text-gray-500 font-medium">{c.title}</p>
+            <p className="text-2xl font-bold mt-1 text-gray-800">{c.value}</p>
+            <span className="absolute top-3 right-4 text-2xl opacity-20">{c.icon}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-5">
+        {/* ยอดขายรายวัน */}
+        <div className="card">
+          <h3 className="font-bold text-gray-700 mb-3">
+            📈 ยอดขาย 7 วันล่าสุด
+            <span className="text-xs text-gray-400 font-normal ml-2">คลิกเพื่อดูรายละเอียด</span>
+          </h3>
+          <div className="space-y-1">
+            {dailySales.map((day) => {
+              const active = selectedDate?.date === day.date;
+              return (
+                <button key={day.date} onClick={() => handleDayClick(day)}
+                  className="w-full flex justify-between items-center px-3 py-2.5 rounded-xl transition-all text-left"
+                  style={active ? { backgroundImage: GRAD } : { background: 'transparent' }}>
+                  <span className="text-sm" style={{ color: active ? '#fff' : '#4b5563' }}>
+                    {formatShortDate(day.date)}
+                  </span>
+                  <div className="text-right">
+                    <span className="text-sm font-bold" style={{ color: active ? '#fff' : '#1f2937' }}>
+                      {formatCurrency(day.total_sales)}
+                    </span>
+                    <span className="text-xs ml-2" style={{ color: active ? 'rgba(255,255,255,0.7)' : '#9ca3af' }}>
+                      ({day.total_orders} บิล)
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+            {dailySales.length === 0 && <p className="text-gray-400 text-sm text-center py-6">ยังไม่มีข้อมูล</p>}
+          </div>
+        </div>
+
+        {/* สินค้าขายดี */}
+        <div className="card">
+          <h3 className="font-bold text-gray-700 mb-3">🏆 สินค้าขายดี Top 5</h3>
+          <div className="space-y-1">
+            {topProducts.map((product, idx) => (
+              <div key={product.id} className="flex justify-between items-center px-3 py-2.5 rounded-xl hover:bg-purple-50">
+                <div className="flex items-center gap-3">
+                  <span className="w-7 h-7 text-white rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                    style={{ backgroundImage: GRAD }}>{idx + 1}</span>
+                  <span className="text-sm font-medium text-gray-800">{product.name}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-sm font-bold text-gray-800">{product.total_quantity} ชิ้น</span>
+                  <p className="text-xs text-gray-400">{formatCurrency(product.total_revenue)}</p>
+                </div>
+              </div>
+            ))}
+            {topProducts.length === 0 && <p className="text-gray-400 text-sm text-center py-6">ยังไม่มีข้อมูล</p>}
+          </div>
+        </div>
+      </div>
+
+      {/* Day Orders Panel */}
+      {selectedDate && (
+        <div className="mt-5 card">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-gray-700">
+              🧾 รายการบิล — {formatShortDate(selectedDate.date)}
+              <span className="ml-2 text-sm font-normal text-gray-400">
+                ({selectedDate.total_orders} บิล / {formatCurrency(selectedDate.total_sales)})
+              </span>
+            </h3>
+            <button onClick={() => { setSelectedDate(null); setSelectedOrder(null); setOrderDetail(null); }}
+              className="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
+          </div>
+          {dayLoading ? <p className="text-center text-gray-400 py-8">⏳ กำลังโหลด...</p> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
+                    <th className="pb-2 pr-4 font-medium">เลขบิล</th>
+                    <th className="pb-2 pr-4 font-medium">เวลา</th>
+                    <th className="pb-2 pr-4 font-medium">แคชเชียร์</th>
+                    <th className="pb-2 pr-4 font-medium">ชำระ</th>
+                    <th className="pb-2 text-right font-medium">ยอด</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dayOrders.map((order) => (
+                    <tr key={order.id} onClick={() => handleOrderClick(order)}
+                      className="cursor-pointer border-b border-gray-50 hover:bg-purple-50 transition-colors"
+                      style={selectedOrder?.id === order.id ? { background: 'rgba(147,51,234,0.08)' } : {}}>
+                      <td className="py-2.5 pr-4 font-mono text-xs font-semibold" style={{ color: '#95008A' }}>{order.order_no}</td>
+                      <td className="py-2.5 pr-4 text-gray-500">{order.created_at?.slice(11, 16)}</td>
+                      <td className="py-2.5 pr-4 text-gray-600">{order.cashier_name || '-'}</td>
+                      <td className="py-2.5 pr-4 text-gray-500 text-xs">{PAY_LABEL[order.payment_method] || order.payment_method}</td>
+                      <td className="py-2.5 text-right font-bold text-gray-800">{formatCurrency(order.total_amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {dayOrders.length === 0 && <p className="text-center text-gray-400 py-6 text-sm">ไม่พบรายการ</p>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Order Detail Modal */}
+      {selectedOrder && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-gray-800 text-lg">{selectedOrder.order_no}</h3>
+                <p className="text-xs text-gray-400">{selectedOrder.created_at?.slice(0, 16)}</p>
+              </div>
+              <button onClick={() => { setSelectedOrder(null); setOrderDetail(null); }}
+                className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 text-sm">✕</button>
+            </div>
+
+            {orderLoading ? <p className="text-center text-gray-400 py-8">⏳ กำลังโหลด...</p> : orderDetail ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                  <div className="bg-gray-50 rounded-xl px-3 py-2">
+                    <p className="text-xs text-gray-400">แคชเชียร์</p>
+                    <p className="text-sm font-semibold text-gray-700">{orderDetail.cashier_name || '-'}</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-xl px-3 py-2">
+                    <p className="text-xs text-gray-400">วิธีชำระ</p>
+                    <p className="text-sm font-semibold text-gray-700">{PAY_LABEL[orderDetail.payment_method] || orderDetail.payment_method}</p>
+                  </div>
+                  {orderDetail.customer_name && (
+                    <div className="bg-gray-50 rounded-xl px-3 py-2 col-span-2">
+                      <p className="text-xs text-gray-400">ลูกค้า</p>
+                      <p className="text-sm font-semibold text-gray-700">{orderDetail.customer_name}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border border-gray-100 rounded-2xl overflow-hidden mb-4">
+                  <div className="px-4 py-2 text-xs text-gray-400 font-medium grid grid-cols-12 bg-gray-50">
+                    <span className="col-span-6">สินค้า</span>
+                    <span className="col-span-2 text-center">จำนวน</span>
+                    <span className="col-span-2 text-right">ราคา</span>
+                    <span className="col-span-2 text-right">รวม</span>
+                  </div>
+                  {orderDetail.items?.map((item) => (
+                    <div key={item.id} className="px-4 py-2.5 grid grid-cols-12 text-sm border-t border-gray-50">
+                      <div className="col-span-6">
+                        <p className="font-medium text-gray-800 text-xs leading-tight">{item.product_name}</p>
+                        <p className="text-xs text-gray-400">{item.sku}</p>
+                      </div>
+                      <span className="col-span-2 text-center text-gray-600">{item.quantity}</span>
+                      <span className="col-span-2 text-right text-gray-600 text-xs">{formatCurrency(item.unit_price)}</span>
+                      <span className="col-span-2 text-right font-semibold text-gray-800 text-xs">{formatCurrency(item.total_price)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex justify-between text-gray-500"><span>ยอดรวม</span><span>{formatCurrency(orderDetail.sub_total)}</span></div>
+                  {orderDetail.discount > 0 && <div className="flex justify-between text-red-500"><span>ส่วนลด</span><span>-{formatCurrency(orderDetail.discount)}</span></div>}
+                  <div className="flex justify-between text-gray-500"><span>VAT</span><span>{formatCurrency(orderDetail.tax)}</span></div>
+                  <div className="flex justify-between text-base font-bold pt-2 border-t border-gray-100">
+                    <span className="text-gray-800">รวมทั้งสิ้น</span>
+                    <span style={{ color: '#95008A' }}>{formatCurrency(orderDetail.total_amount)}</span>
+                  </div>
+                </div>
+              </>
+            ) : <p className="text-center text-gray-400 py-8">ไม่พบข้อมูล</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+  };
+
+  return (
+    <div className={`rounded-xl border p-4 ${colors[color]}`}>
+      <p className="text-sm opacity-80">{title}</p>
+      <p className="text-2xl font-bold mt-1">{value}</p>
+    </div>
+  );
+}

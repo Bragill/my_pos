@@ -1,0 +1,233 @@
+﻿import { useState, useEffect } from 'react';
+import { formatCurrency } from '../utils/format';
+import api from '../services/api';
+import toast from 'react-hot-toast';
+import BarcodeScanner from '../components/BarcodeScanner';
+
+export default function ProductsPage() {
+  const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [search, setSearch] = useState('');
+  const [showScanner, setShowScanner] = useState(false);
+  const [form, setForm] = useState({
+    sku: '', barcode: '', name: '', description: '', category_id: '',
+    cost_price: '', selling_price: '', image_url: '', is_featured: false, reorder_level: 5,
+  });
+
+  useEffect(() => {
+    loadProducts();
+    loadCategories();
+  }, []);
+
+  const loadProducts = async () => {
+    try {
+      const res = await api.get('/products', { params: { limit: 200 } });
+      setProducts(res.data.data);
+    } catch (err) {
+      toast.error('โหลดสินค้าไม่สำเร็จ');
+    }
+  };
+
+  const loadCategories = async () => {
+    try {
+      const res = await api.get('/categories');
+      setCategories(res.data.data);
+    } catch {}
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      if (editingProduct) {
+        await api.put(`/products/${editingProduct.id}`, { ...form, is_active: true });
+        toast.success('แก้ไขสินค้าสำเร็จ');
+      } else {
+        await api.post('/products', form);
+        toast.success('เพิ่มสินค้าสำเร็จ');
+      }
+      setShowForm(false);
+      setEditingProduct(null);
+      resetForm();
+      loadProducts();
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'เกิดข้อผิดพลาด');
+    }
+  };
+
+  const generateSku = async () => {
+    try {
+      const res = await api.get('/products/generate-sku');
+      return res.data.data.sku;
+    } catch { return 'PRD' + Date.now().toString().slice(-6); }
+  };
+
+  const resetForm = async () => {
+    const sku = await generateSku();
+    setForm({ sku, barcode: '', name: '', description: '', category_id: '',
+      cost_price: '', selling_price: '', image_url: '', is_featured: false, reorder_level: 5 });
+  };
+
+  const editProduct = (product) => {
+    setForm({
+      sku: product.sku, barcode: product.barcode || '', name: product.name,
+      description: product.description || '', category_id: product.category_id || '',
+      cost_price: product.cost_price, selling_price: product.selling_price,
+      image_url: product.image_url || '', is_featured: product.is_featured,
+      reorder_level: 5, is_active: product.is_active,
+    });
+    setEditingProduct(product);
+    setShowForm(true);
+  };
+
+  const filtered = products.filter((p) =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
+    p.sku?.toLowerCase().includes(search.toLowerCase()) ||
+    p.barcode?.includes(search)
+  );
+
+  return (
+    <div className="p-6 overflow-y-auto h-[calc(100vh-56px)]">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-gray-800">📦 จัดการสินค้า</h1>
+        <button onClick={async () => { await resetForm(); setEditingProduct(null); setShowForm(true); }} className="btn-primary">
+          + เพิ่มสินค้า
+        </button>
+      </div>
+
+      <input
+        type="text"
+        placeholder="🔍 ค้นหาสินค้า..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="input-field mb-4 max-w-md"
+      />
+
+      {/* ตารางสินค้า */}
+      <div className="card overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200 text-left text-gray-500">
+              <th className="py-3 px-2">SKU</th>
+              <th className="py-3 px-2">ชื่อสินค้า</th>
+              <th className="py-3 px-2">หมวดหมู่</th>
+              <th className="py-3 px-2 text-right">ต้นทุน</th>
+              <th className="py-3 px-2 text-right">ราคาขาย</th>
+              <th className="py-3 px-2 text-right">สต๊อก</th>
+              <th className="py-3 px-2">จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((product) => (
+              <tr key={product.id} className="border-b border-gray-50 hover:bg-gray-50">
+                <td className="py-2 px-2 text-gray-600">{product.sku}</td>
+                <td className="py-2 px-2 font-medium">
+                  {product.is_featured && <span className="text-yellow-500 mr-1">⭐</span>}
+                  {product.name}
+                </td>
+                <td className="py-2 px-2 text-gray-500">{product.category_name}</td>
+                <td className="py-2 px-2 text-right text-gray-500">{formatCurrency(product.cost_price)}</td>
+                <td className="py-2 px-2 text-right font-semibold">{formatCurrency(product.selling_price)}</td>
+                <td className={`py-2 px-2 text-right font-semibold ${product.stock_quantity <= 5 ? 'text-red-500' : 'text-green-600'}`}>
+                  {product.stock_quantity}
+                </td>
+                <td className="py-2 px-2">
+                  <button onClick={() => editProduct(product)} className="text-blue-600 hover:underline text-sm">
+                    แก้ไข
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modal ฟอร์ม */}
+      {showForm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-bold mb-4">{editingProduct ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">รหัสสินค้า (SKU)</label>
+                  <div className="relative">
+                    <input value={form.sku} readOnly
+                      className="input-field bg-gray-50 text-gray-500 cursor-not-allowed font-mono pr-10" />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔒</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">สร้างอัตโนมัติ ไม่สามารถแก้ไขได้</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">บาร์โค้ด</label>
+                  <div className="flex gap-2">
+                    <input value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                      className="input-field flex-1" placeholder="กรอก หรือ สแกนบาร์โค้ด" />
+                    <button type="button" onClick={() => setShowScanner(true)}
+                      title="สแกนบาร์โค้ดด้วยกล้อง"
+                      className="flex-shrink-0 w-11 h-11 rounded-xl text-white text-xl flex items-center justify-center shadow hover:opacity-90 active:scale-95 transition-all"
+                      style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}>
+                      📷
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">ชื่อสินค้า*</label>
+                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="input-field" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">หมวดหมู่</label>
+                <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}
+                  className="input-field">
+                  <option value="">-- เลือกหมวดหมู่ --</option>
+                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">ราคาต้นทุน*</label>
+                  <input type="number" step="0.01" value={form.cost_price}
+                    onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
+                    className="input-field" required />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">ราคาขาย*</label>
+                  <input type="number" step="0.01" value={form.selling_price}
+                    onChange={(e) => setForm({ ...form, selling_price: e.target.value })}
+                    className="input-field" required />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" checked={form.is_featured}
+                  onChange={(e) => setForm({ ...form, is_featured: e.target.checked })}
+                  id="featured" />
+                <label htmlFor="featured" className="text-sm">สินค้าแนะนำ (แสดงหน้าแรก)</label>
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setShowForm(false)} className="btn-ghost flex-1">ยกเลิก</button>
+                <button type="submit" className="btn-primary flex-1">
+                  {editingProduct ? 'บันทึก' : 'เพิ่มสินค้า'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Barcode Scanner Modal */}
+      {showScanner && (
+        <BarcodeScanner
+          onDetected={(barcode) => {
+            setForm(f => ({ ...f, barcode }));
+            setShowScanner(false);
+            toast.success(`สแกนได้: ${barcode}`);
+          }}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
+    </div>
+  );
+}

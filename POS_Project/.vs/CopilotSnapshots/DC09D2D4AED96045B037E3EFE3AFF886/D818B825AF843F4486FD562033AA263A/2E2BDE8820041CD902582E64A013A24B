@@ -1,0 +1,527 @@
+﻿import { useState, useEffect } from 'react';
+import { formatCurrency } from '../utils/format';
+import api from '../services/api';
+import toast from 'react-hot-toast';
+import BarcodeScanner from '../components/BarcodeScanner';
+import ScanIcon from '../components/ScanIcon';
+
+const GRAD = 'linear-gradient(to left,#3300FC,#95008A,#EB0000)';
+
+function PackCalculator({ onApply, onUnlock }) {
+  const [open, setOpen] = useState(false);
+  const [packs, setPacks] = useState('');
+  const [perPack, setPerPack] = useState('');
+  const [packPrice, setPackPrice] = useState('');
+  const [applied, setApplied] = useState(false);
+
+  const numPacks   = parseFloat(packs)    || 0;
+  const numPerPack = parseFloat(perPack)  || 0;
+  const numPrice   = parseFloat(packPrice)|| 0;
+  const totalItems = numPacks * numPerPack;
+  const costPerItem = totalItems > 0 ? numPrice / numPerPack : 0;
+  const totalCost  = numPacks * numPrice;
+
+  const handleApply = () => {
+    if (costPerItem <= 0) return;
+    onApply(parseFloat(costPerItem.toFixed(4)));
+    setApplied(true);
+    setOpen(false);
+  };
+
+  const handleUnlock = () => {
+    setApplied(false);
+    setPacks(''); setPerPack(''); setPackPrice('');
+    onUnlock();
+  };
+
+  return (
+    <div className="col-span-2 mt-1">
+      {/* Toggle button */}
+      <button type="button"
+        onClick={() => { if (!applied) setOpen(o => !o); }}
+        className={"flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border transition-all " +
+          (applied
+            ? "border-green-300 text-green-700 bg-green-50 cursor-default"
+            : "border-red-300 text-red-700 bg-red-50 hover:bg-red-100")}
+      >
+        <span>{applied ? '🔒' : '📦'}</span>
+        {applied ? `ใช้ต้นทุนจากแพ็ค (฿${costPerItem.toFixed(2)}/ชิ้น)` : 'คำนวณจากแพ็ค'}
+        {!applied && <span className="text-gray-400 ml-1">{open ? '▲' : '▼'}</span>}
+      </button>
+
+      {/* Unlock button shown when applied */}
+      {applied && (
+        <button type="button" onClick={handleUnlock}
+          className="ml-2 text-xs text-gray-400 hover:text-red-500 underline transition-colors">
+          ยกเลิกล็อก
+        </button>
+      )}
+
+      {/* Calculator panel */}
+      {open && !applied && (
+        <div className="mt-2 rounded-2xl p-4 space-y-3"
+          style={{ border: '2px solid #EB0000', background: 'rgba(235,0,0,0.03)' }}>
+          <p className="text-sm font-bold" style={{ color: '#EB0000' }}>📦 คำนวณต้นทุนต่อชิ้นจากแพ็ค</p>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">จำนวนแพ็ค</label>
+              <input type="number" min="1" value={packs}
+                onChange={e => setPacks(e.target.value)}
+                className="input-field !py-2 text-sm text-center" placeholder="5" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">ชิ้น/แพ็ค</label>
+              <input type="number" min="1" value={perPack}
+                onChange={e => setPerPack(e.target.value)}
+                className="input-field !py-2 text-sm text-center" placeholder="10" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">ราคา/แพ็ค (฿)</label>
+              <input type="number" min="0" step="0.01" value={packPrice}
+                onChange={e => setPackPrice(e.target.value)}
+                className="input-field !py-2 text-sm text-center" placeholder="50" />
+            </div>
+          </div>
+
+          {totalItems > 0 && numPrice > 0 && (
+            <div className="rounded-xl bg-white border border-red-100 divide-y divide-red-50 text-sm overflow-hidden">
+              <div className="flex justify-between items-center px-3 py-2">
+                <span className="text-gray-500">จำนวนทั้งหมด</span>
+                <span className="font-semibold text-gray-700">{totalItems.toLocaleString()} ชิ้น</span>
+              </div>
+              <div className="flex justify-between items-center px-3 py-2">
+                <span className="text-gray-500">ต้นทุนรวม</span>
+                <span className="font-semibold text-gray-700">฿{totalCost.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between items-center px-3 py-2 bg-red-50">
+                <span className="font-bold" style={{ color: '#EB0000' }}>ต้นทุนต่อชิ้น</span>
+                <span className="text-lg font-bold" style={{ color: '#EB0000' }}>฿{costPerItem.toFixed(2)}</span>
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setOpen(false)}
+              className="flex-1 py-2 rounded-xl border border-gray-200 text-gray-500 text-sm hover:bg-gray-50 transition-all">
+              ยกเลิก
+            </button>
+            <button type="button" onClick={handleApply}
+              disabled={costPerItem <= 0}
+              className="flex-1 py-2.5 rounded-xl text-white text-sm font-bold shadow disabled:opacity-40 hover:opacity-90 transition-all"
+              style={{ backgroundImage: GRAD }}>
+              ✅ ใช้ค่านี้ (฿{costPerItem > 0 ? costPerItem.toFixed(2) : '0.00'})
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function ProductsPage() {
+  const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [search, setSearch] = useState('');
+  const [showScanner, setShowScanner] = useState(false);
+  const [packLocked, setPackLocked] = useState(false);
+  const [form, setForm] = useState({
+    sku: '', barcode: '', name: '', description: '', category_id: '',
+    cost_price: '', selling_price: '', image_url: '', is_featured: false, reorder_level: 5,
+  });
+
+  useEffect(() => {
+    loadProducts();
+    loadCategories();
+  }, []);
+
+  const loadProducts = async () => {
+    try {
+      const res = await api.get('/products', { params: { limit: 200 } });
+      setProducts(res.data.data);
+    } catch (err) {
+      toast.error('โหลดสินค้าไม่สำเร็จ');
+    }
+  };
+
+  const loadCategories = async () => {
+    try {
+      const res = await api.get('/categories');
+      setCategories(res.data.data);
+    } catch {}
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      if (editingProduct) {
+        await api.put(`/products/${editingProduct.id}`, { ...form, is_active: true });
+        toast.success('แก้ไขสินค้าสำเร็จ');
+      } else {
+        await api.post('/products', form);
+        toast.success('เพิ่มสินค้าสำเร็จ');
+      }
+      setShowForm(false);
+      setEditingProduct(null);
+      resetForm();
+      loadProducts();
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'เกิดข้อผิดพลาด');
+    }
+  };
+
+  const generateSku = async () => {
+    try {
+      const res = await api.get('/products/generate-sku');
+      return res.data.data.sku;
+    } catch { return 'PRD' + Date.now().toString().slice(-6); }
+  };
+
+  const resetForm = async () => {
+    const sku = await generateSku();
+    setPackLocked(false);
+    setForm({ sku, barcode: '', name: '', description: '', category_id: '',
+      cost_price: '', selling_price: '', image_url: '', is_featured: false, reorder_level: 5 });
+  };
+
+  const editProduct = (product) => {
+    setForm({
+      sku: product.sku, barcode: product.barcode || '', name: product.name,
+      description: product.description || '', category_id: product.category_id || '',
+      cost_price: product.cost_price, selling_price: product.selling_price,
+      image_url: product.image_url || '', is_featured: product.is_featured,
+      reorder_level: 5, is_active: product.is_active,
+    });
+    setEditingProduct(product);
+    setPackLocked(false);
+    setShowForm(true);
+  };
+
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const handleDelete = async () => {
+    try {
+      await api.delete(`/products/${deleteConfirm.id}`);
+      toast.success(`ลบ "${deleteConfirm.name}" สำเร็จ`);
+      setDeleteConfirm(null);
+      loadProducts();
+    } catch (err) { toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาด'); }
+  };
+
+  // Deleted products drawer
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [deletedProducts, setDeletedProducts] = useState([]);
+  const [deletedSearch, setDeletedSearch] = useState('');
+  const [deletedLoading, setDeletedLoading] = useState(false);
+  const [restoreConfirm, setRestoreConfirm] = useState(null);
+
+  const loadDeletedProducts = async () => {
+    setDeletedLoading(true);
+    try {
+      const res = await api.get('/products/deleted', { params: { search: deletedSearch || undefined } });
+      setDeletedProducts(res.data.data);
+    } catch { toast.error('โหลดข้อมูลไม่สำเร็จ'); }
+    finally { setDeletedLoading(false); }
+  };
+
+  const handleRestore = async () => {
+    try {
+      await api.post(`/products/${restoreConfirm.id}/restore`);
+      toast.success(`กู้คืน "${restoreConfirm.name}" สำเร็จ`);
+      setRestoreConfirm(null);
+      loadDeletedProducts();
+      loadProducts();
+    } catch (err) { toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาด'); }
+  };
+
+  const filtered = products.filter((p) =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
+    p.sku?.toLowerCase().includes(search.toLowerCase()) ||
+    p.barcode?.includes(search)
+  );
+
+  return (
+    <div className="p-6 overflow-y-auto h-[calc(100vh-56px)]">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-gray-800">📦 จัดการสินค้า</h1>
+        <div className="flex gap-2">
+          <button onClick={() => { setShowDeleted(true); loadDeletedProducts(); }}
+            className="btn-ghost !py-2 !px-4 text-sm flex items-center gap-1.5">
+            🗑️ สินค้าที่ลบแล้ว
+          </button>
+          <button onClick={async () => { await resetForm(); setEditingProduct(null); setShowForm(true); }} className="btn-primary">
+            + เพิ่มสินค้า
+          </button>
+        </div>
+      </div>
+
+      <input
+        type="text"
+        placeholder="🔍 ค้นหาสินค้า..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="input-field mb-4 max-w-md"
+      />
+
+      {/* ตารางสินค้า */}
+      <div className="card overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200 text-left text-gray-500">
+              <th className="py-3 px-2">SKU</th>
+              <th className="py-3 px-2">ชื่อสินค้า</th>
+              <th className="py-3 px-2">หมวดหมู่</th>
+              <th className="py-3 px-2 text-right">ต้นทุน</th>
+              <th className="py-3 px-2 text-right">ราคาขาย</th>
+              <th className="py-3 px-2 text-right">สต๊อก</th>
+              <th className="py-3 px-2">จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((product) => (
+              <tr key={product.id} className="border-b border-gray-50 hover:bg-gray-50">
+                <td className="py-2 px-2 text-gray-600">{product.sku}</td>
+                <td className="py-2 px-2 font-medium">
+                  {product.is_featured && <span className="text-yellow-500 mr-1">⭐</span>}
+                  {product.name}
+                </td>
+                <td className="py-2 px-2 text-gray-500">{product.category_name}</td>
+                <td className="py-2 px-2 text-right text-gray-500">{formatCurrency(product.cost_price)}</td>
+                <td className="py-2 px-2 text-right font-semibold">{formatCurrency(product.selling_price)}</td>
+                <td className={`py-2 px-2 text-right font-semibold ${product.stock_quantity <= 5 ? 'text-red-500' : 'text-green-600'}`}>
+                  {product.stock_quantity}
+                </td>
+                <td className="py-2 px-2">
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => editProduct(product)} className="text-blue-600 hover:underline text-sm">
+                      แก้ไข
+                    </button>
+                    <span className="text-gray-200">|</span>
+                    <button onClick={() => setDeleteConfirm(product)} className="text-red-500 hover:underline text-sm">
+                      ลบ
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modal ฟอร์ม */}
+      {showForm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-bold mb-4">{editingProduct ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">รหัสสินค้า (SKU)</label>
+                  <div className="relative">
+                    <input value={form.sku} readOnly
+                      className="input-field bg-gray-50 text-gray-500 cursor-not-allowed font-mono pr-10" />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔒</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">สร้างอัตโนมัติ ไม่สามารถแก้ไขได้</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">บาร์โค้ด</label>
+                  <div className="flex gap-2">
+                    <input value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                      className="input-field flex-1" placeholder="กรอก หรือ สแกนบาร์โค้ด" />
+                    <button type="button" onClick={() => setShowScanner(true)}
+                      title="สแกนบาร์โค้ดด้วยกล้อง"
+                      className="flex-shrink-0 w-11 h-11 rounded-xl text-white flex items-center justify-center shadow hover:opacity-90 active:scale-95 transition-all"
+                      style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}>
+                      <ScanIcon size={22} color="white" strokeWidth={2} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">ชื่อสินค้า*</label>
+                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="input-field" required />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">หมวดหมู่</label>
+                <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}
+                  className="input-field">
+                  <option value="">-- เลือกหมวดหมู่ --</option>
+                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">ราคาต้นทุน*</label>
+                  <div className="relative">
+                    <input type="number" step="0.01" value={form.cost_price}
+                      onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
+                      disabled={packLocked}
+                      className={"input-field pr-9 " + (packLocked ? "bg-gray-100 text-gray-500 cursor-not-allowed opacity-100" : "")}
+                      style={packLocked ? { pointerEvents: 'none' } : {}}
+                      required={!packLocked} />
+                    {packLocked && (
+                      <>
+                        <input type="hidden" name="cost_price" value={form.cost_price} required />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔒</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">ราคาขาย*</label>
+                  <input type="number" step="0.01" value={form.selling_price}
+                    onChange={(e) => setForm({ ...form, selling_price: e.target.value })}
+                    className="input-field" required />
+                </div>
+                <PackCalculator
+                  onApply={(cost) => { setForm(f => ({ ...f, cost_price: cost })); setPackLocked(true); }}
+                  onUnlock={() => { setPackLocked(false); setForm(f => ({ ...f, cost_price: '' })); }}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" checked={form.is_featured}
+                  onChange={(e) => setForm({ ...form, is_featured: e.target.checked })}
+                  id="featured" />
+                <label htmlFor="featured" className="text-sm">สินค้าแนะนำ (แสดงหน้าแรก)</label>
+              </div>
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setShowForm(false)} className="btn-ghost flex-1">ยกเลิก</button>
+                <button type="submit" className="btn-primary flex-1">
+                  {editingProduct ? 'บันทึก' : 'เพิ่มสินค้า'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Barcode Scanner Modal */}
+      {showScanner && (
+        <BarcodeScanner
+          onDetected={(barcode) => {
+            setForm(f => ({ ...f, barcode }));
+            setShowScanner(false);
+            toast.success(`สแกนได้: ${barcode}`);
+          }}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
+
+      {/* Delete Confirm Modal */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6 text-center">
+            <p className="text-4xl mb-3">🗑️</p>
+            <p className="font-bold text-gray-800 text-lg mb-1">ลบสินค้า?</p>
+            <p className="text-sm text-gray-500 mb-1">
+              <span className="font-semibold text-gray-700">"{deleteConfirm.name}"</span>
+            </p>
+            <p className="text-xs text-amber-600 bg-amber-50 rounded-xl px-3 py-2 mb-5">
+              ⚠️ สินค้าจะถูกซ่อนจากระบบ แต่ประวัติการขายจะยังคงอยู่
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setDeleteConfirm(null)} className="btn-ghost flex-1">ยกเลิก</button>
+              <button onClick={handleDelete}
+                className="flex-1 py-3 rounded-xl text-white font-bold shadow hover:opacity-90 transition-all"
+                style={{ backgroundImage: 'linear-gradient(to left,#EB0000,#95008A)' }}>
+                🗑️ ยืนยันลบ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deleted Products Drawer */}
+      {showDeleted && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex justify-end z-50">
+          <div className="bg-white w-full max-w-2xl h-full flex flex-col shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100"
+              style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}>
+              <h2 className="text-lg font-bold text-white">🗑️ สินค้าที่ถูกลบ</h2>
+              <button onClick={() => setShowDeleted(false)}
+                className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center">✕</button>
+            </div>
+
+            {/* Search */}
+            <div className="px-6 py-3 border-b border-gray-100">
+              <div className="flex gap-2">
+                <input type="text" placeholder="🔍 ค้นหาชื่อสินค้า / SKU"
+                  value={deletedSearch} onChange={e => setDeletedSearch(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && loadDeletedProducts()}
+                  className="input-field flex-1" />
+                <button onClick={loadDeletedProducts} className="btn-ghost !py-2 !px-4 text-sm">ค้นหา</button>
+              </div>
+            </div>
+
+            {/* List */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {deletedLoading ? (
+                <p className="text-center text-gray-400 py-16">⏳ กำลังโหลด...</p>
+              ) : deletedProducts.length === 0 ? (
+                <div className="text-center py-16">
+                  <p className="text-4xl mb-3">✅</p>
+                  <p className="text-gray-500 font-medium">ไม่มีสินค้าที่ถูกลบ</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {deletedProducts.map(p => (
+                    <div key={p.id} className="border border-red-100 bg-red-50/40 rounded-2xl px-4 py-3 flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-xs font-mono text-gray-400">{p.sku}</span>
+                          <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">ถูกลบ</span>
+                        </div>
+                        <p className="font-semibold text-gray-800">{p.name}</p>
+                        <div className="flex gap-3 mt-1 text-xs text-gray-400">
+                          <span>หมวด: {p.category_name || '—'}</span>
+                          <span>ต้นทุน: ฿{p.cost_price}</span>
+                          <span>ราคาขาย: ฿{p.selling_price}</span>
+                          <span>สต๊อก: {p.stock_quantity}</span>
+                        </div>
+                        <p className="text-xs text-gray-300 mt-0.5">ลบเมื่อ: {p.updated_at?.slice(0,16)}</p>
+                      </div>
+                      <button onClick={() => setRestoreConfirm(p)}
+                        className="flex-shrink-0 px-4 py-2 rounded-xl text-white text-sm font-semibold shadow hover:opacity-90 active:scale-95 transition-all"
+                        style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}>
+                        ♻️ กู้คืน
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 text-xs text-gray-400 text-center">
+              สินค้าที่ถูกลบจะยังคงข้อมูลประวัติการขายไว้
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restore Confirm Modal */}
+      {restoreConfirm && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6 text-center">
+            <p className="text-4xl mb-3">♻️</p>
+            <p className="font-bold text-gray-800 text-lg mb-1">กู้คืนสินค้า?</p>
+            <p className="text-sm text-gray-600 mb-5">
+              <span className="font-semibold">"{restoreConfirm.name}"</span> จะกลับมาแสดงในระบบและหน้าขาย
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setRestoreConfirm(null)} className="btn-ghost flex-1">ยกเลิก</button>
+              <button onClick={handleRestore}
+                className="flex-1 py-3 rounded-xl text-white font-bold shadow hover:opacity-90 transition-all"
+                style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}>
+                ♻️ ยืนยันกู้คืน
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

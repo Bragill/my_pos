@@ -1,0 +1,429 @@
+﻿import { useState, useEffect } from "react";
+import { formatCurrency } from "../utils/format";
+import api from "../services/api";
+import toast from "react-hot-toast";
+
+const GRAD = "linear-gradient(to left,#3300FC,#95008A,#EB0000)";
+const PAY_METHODS = [
+  { value: "cash",         label: "💵", sub: "เงินสด" },
+  { value: "credit_card",  label: "💳", sub: "บัตรเครดิต" },
+  { value: "qr_promptpay", label: "📱", sub: "QR/PromptPay" },
+];
+
+export default function CustomersPage() {
+  const [tab, setTab] = useState("outstanding");
+  const [orders, setOrders] = useState([]);
+  const [debtors, setDebtors] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+
+  // single-order pay modal
+  const [payOrderModal, setPayOrderModal] = useState(null);
+  const [payMethod, setPayMethod] = useState("cash");
+  const [paying, setPaying] = useState(false);
+
+  // debtor pay modal (ชำระเต็มจำนวน / ชำระจำนวนเงิน)
+  const [debtorPayModal, setDebtorPayModal] = useState(null); // debtor object
+  const [debtorPayType, setDebtorPayType] = useState("full"); // "full" | "partial"
+  const [partialAmount, setPartialAmount] = useState("");
+  const [debtorPayMethod, setDebtorPayMethod] = useState("cash");
+  const [debtorPaying, setDebtorPaying] = useState(false);
+
+  // delete outstanding order
+  const [deleteOrderConfirm, setDeleteOrderConfirm] = useState(null);
+  const handleDeleteOrder = async () => {
+    try {
+      await api.delete(`/orders/${deleteOrderConfirm.id}`);
+      toast.success('ลบรายการค้างชำระสำเร็จ');
+      setDeleteOrderConfirm(null);
+      loadAll();
+    } catch (err) { toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาด'); }
+  };
+
+  // debtor CRUD modal
+  const [debtorModal, setDebtorModal] = useState(null);
+  const [debtorForm, setDebtorForm] = useState({ name: "", phone: "", note: "" });
+  const [savingDebtor, setSavingDebtor] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+  useEffect(() => { loadAll(); }, []);
+
+  const loadAll = async () => {
+    setLoading(true);
+    try {
+      const [o, d] = await Promise.all([
+        api.get("/orders/outstanding"),
+        api.get("/debtors"),
+      ]);
+      setOrders(o.data.data);
+      setDebtors(d.data.data);
+    } catch { toast.error("โหลดข้อมูลไม่สำเร็จ"); }
+    finally { setLoading(false); }
+  };
+
+  /* ── Single order pay ── */
+  const handlePayOrder = async () => {
+    setPaying(true);
+    try {
+      await api.post(`/orders/${payOrderModal.id}/pay-outstanding`, { payment_method: payMethod });
+      toast.success("ชำระเงินสำเร็จ!");
+      setPayOrderModal(null);
+      loadAll();
+    } catch (err) { toast.error(err.response?.data?.message || "เกิดข้อผิดพลาด"); }
+    finally { setPaying(false); }
+  };
+
+  /* ── Debtor pay (full / partial) ── */
+  const openDebtorPay = (debtor) => {
+    setDebtorPayModal(debtor);
+    setDebtorPayType("full");
+    setPartialAmount("");
+    setDebtorPayMethod("cash");
+  };
+
+  const handleDebtorPay = async () => {
+    setDebtorPaying(true);
+    try {
+      if (debtorPayType === "full") {
+        // Pay all outstanding orders for this debtor one by one
+        await api.post("/orders/pay-partial", {
+          debtor_id: debtorPayModal.id,
+          payment_method: debtorPayMethod,
+          amount: debtorPayModal.total_outstanding,
+        });
+        toast.success("ชำระเต็มจำนวนสำเร็จ!");
+      } else {
+        const amt = parseFloat(partialAmount);
+        if (!amt || amt <= 0) { toast.error("กรุณากรอกจำนวนเงิน"); setDebtorPaying(false); return; }
+        if (amt > debtorPayModal.total_outstanding) { toast.error("จำนวนเงินเกินยอดค้างชำระ"); setDebtorPaying(false); return; }
+        await api.post("/orders/pay-partial", {
+          debtor_id: debtorPayModal.id,
+          payment_method: debtorPayMethod,
+          amount: amt,
+        });
+        toast.success(`ชำระ ${formatCurrency(amt)} สำเร็จ!`);
+      }
+      setDebtorPayModal(null);
+      loadAll();
+    } catch (err) { toast.error(err.response?.data?.message || "เกิดข้อผิดพลาด"); }
+    finally { setDebtorPaying(false); }
+  };
+
+  /* ── Debtor CRUD ── */
+  const openNewDebtor = () => { setDebtorForm({ name: "", phone: "", note: "" }); setDebtorModal("new"); };
+  const openEditDebtor = (d) => { setDebtorForm({ name: d.name, phone: d.phone||"", note: d.note||"" }); setDebtorModal(d); };
+
+  const handleSaveDebtor = async (e) => {
+    e.preventDefault();
+    setSavingDebtor(true);
+    try {
+      if (debtorModal === "new") { await api.post("/debtors", debtorForm); toast.success("เพิ่มลูกหนี้สำเร็จ"); }
+      else { await api.put(`/debtors/${debtorModal.id}`, debtorForm); toast.success("แก้ไขสำเร็จ"); }
+      setDebtorModal(null);
+      loadAll();
+    } catch (err) { toast.error(err.response?.data?.message || "เกิดข้อผิดพลาด"); }
+    finally { setSavingDebtor(false); }
+  };
+
+  const handleDeleteDebtor = async (d) => {
+    try {
+      await api.delete(`/debtors/${d.id}`);
+      toast.success("ลบสำเร็จ");
+      setDeleteConfirm(null);
+      loadAll();
+    } catch (err) { toast.error(err.response?.data?.message || "เกิดข้อผิดพลาด"); }
+  };
+
+  const filteredOrders = orders.filter(o =>
+    !search || (o.debtor_name||"").toLowerCase().includes(search.toLowerCase()) || o.order_no.includes(search)
+  );
+  const filteredDebtors = debtors.filter(d =>
+    !search || d.name.toLowerCase().includes(search.toLowerCase()) || (d.phone||"").includes(search)
+  );
+
+  return (
+    <div className="p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)]">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-5">
+        <h1 className="text-2xl font-bold text-gray-800">📋 ลูกหนี้/ค้างชำระ</h1>
+        <div className="flex gap-2">
+          <button onClick={openNewDebtor} className="btn-primary !py-2 !px-4 text-sm">➕ เพิ่มลูกหนี้</button>
+          <button onClick={loadAll} className="btn-ghost !py-2 !px-3 text-sm">🔄</button>
+        </div>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 gap-4 mb-5">
+        <div className="card relative overflow-hidden cursor-pointer" onClick={() => setTab("outstanding")}>
+          <p className="text-xs text-gray-500">รายการค้างชำระ</p>
+          <p className="text-2xl font-bold text-gray-800 mt-1">{orders.length} รายการ</p>
+          <p className="text-sm font-semibold mt-0.5" style={{ color: "#EB0000" }}>{formatCurrency(orders.reduce((s,o)=>s+o.total_amount,0))}</p>
+          <span className="absolute top-3 right-4 text-2xl opacity-20">📋</span>
+        </div>
+        <div className="card relative overflow-hidden cursor-pointer" onClick={() => setTab("debtors")}>
+          <p className="text-xs text-gray-500">รายชื่อลูกหนี้</p>
+          <p className="text-2xl font-bold text-gray-800 mt-1">{debtors.length} คน</p>
+          <p className="text-sm font-semibold mt-0.5" style={{ color: "#95008A" }}>{formatCurrency(debtors.reduce((s,d)=>s+(d.total_outstanding||0),0))}</p>
+          <span className="absolute top-3 right-4 text-2xl opacity-20">👤</span>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex bg-white/60 rounded-2xl p-1 mb-4 border border-purple-100 w-fit">
+        {[["outstanding","📋 รายการค้างชำระ"],["debtors","👤 รายชื่อลูกหนี้"]].map(([v,l])=>(
+          <button key={v} onClick={()=>{ setTab(v); setSearch(""); }}
+            className={"px-4 py-2 rounded-xl text-sm font-semibold transition-all "+(tab===v?"text-white shadow-md":"text-gray-500 hover:text-gray-700")}
+            style={tab===v?{backgroundImage:GRAD}:{}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* Search */}
+      <input type="text"
+        placeholder={tab==="outstanding"?"🔍 ค้นหาชื่อ / เลขบิล":"🔍 ค้นหาชื่อ / เบอร์โทร"}
+        value={search} onChange={e=>setSearch(e.target.value)}
+        className="input-field mb-4 max-w-md" />
+
+      {loading ? <div className="text-center text-gray-400 py-16">⏳ กำลังโหลด...</div> : (<>
+
+        {/* ── Outstanding Orders Tab ── */}
+        {tab === "outstanding" && (
+          filteredOrders.length === 0
+            ? <div className="card text-center py-16"><p className="text-4xl mb-3">✅</p><p className="text-gray-500 font-medium">ไม่มีรายการค้างชำระ</p></div>
+            : <div className="space-y-3">
+                {filteredOrders.map(order => (
+                  <div key={order.id} className="card hover:shadow-md transition-all">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs font-mono font-semibold" style={{color:"#95008A"}}>{order.order_no}</span>
+                          <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">ค้างชำระ</span>
+                        </div>
+                        <p className="font-bold text-gray-800">{order.debtor_name || "ไม่ระบุชื่อ"}</p>
+                        <p className="text-xs text-gray-400 mt-0.5">{order.created_at?.slice(0,16)} · {order.cashier_name}</p>
+                        <div className="mt-1.5 space-y-0.5">
+                          {order.items?.slice(0,3).map(item=>(
+                            <p key={item.id} className="text-xs text-gray-500">• {item.product_name} × {item.quantity} = {formatCurrency(item.total_price)}</p>
+                          ))}
+                          {order.items?.length > 3 && <p className="text-xs text-gray-400">...และอีก {order.items.length-3} รายการ</p>}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-xl font-bold" style={{color:"#EB0000"}}>{formatCurrency(order.total_amount)}</p>
+                        <button onClick={()=>{ setPayOrderModal(order); setPayMethod("cash"); }}
+                          className="mt-2 px-4 py-2 rounded-xl text-white text-sm font-semibold shadow hover:opacity-90 active:scale-95 transition-all"
+                          style={{backgroundImage:GRAD}}>💳 รับชำระ</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+        )}
+
+        {/* ── Debtors Tab ── */}
+        {tab === "debtors" && (
+          filteredDebtors.length === 0
+            ? <div className="card text-center py-16">
+                <p className="text-4xl mb-3">👤</p>
+                <p className="text-gray-500 font-medium">ยังไม่มีรายชื่อลูกหนี้</p>
+                <button onClick={openNewDebtor} className="btn-primary mt-4 !py-2 !px-5 text-sm">➕ เพิ่มลูกหนี้</button>
+              </div>
+            : <div className="space-y-3">
+                {filteredDebtors.map(d => (
+                  <div key={d.id} className="card hover:shadow-md transition-all">
+                    <div className="flex items-center gap-3">
+                      {/* Avatar */}
+                      <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
+                        style={{backgroundImage:GRAD}}>{d.name.slice(0,2).toUpperCase()}</div>
+
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-gray-800">{d.name}</p>
+                        <p className="text-xs text-gray-400">{d.phone || "ไม่มีเบอร์โทร"}{d.note ? ` · ${d.note}` : ""}</p>
+                        {/* Outstanding summary */}
+                        {d.order_count > 0 ? (
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+                              ค้างชำระ {d.order_count} บิล
+                            </span>
+                            <span className="text-sm font-bold" style={{color:"#EB0000"}}>{formatCurrency(d.total_outstanding)}</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full mt-1 inline-block">✅ ไม่มียอดค้าง</span>
+                        )}
+                        {/* Per-order mini list */}
+                        {d.orders?.length > 0 && (
+                          <div className="mt-1.5 space-y-0.5">
+                            {d.orders.slice(0,2).map(o=>(
+                              <p key={o.id} className="text-xs text-gray-400">• {o.order_no} — {formatCurrency(o.total_amount)} ({o.created_at?.slice(0,10)})</p>
+                            ))}
+                            {d.orders.length > 2 && <p className="text-xs text-gray-400">...และอีก {d.orders.length-2} บิล</p>}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex flex-col gap-1.5 flex-shrink-0 items-end">
+                        {d.order_count > 0 && (
+                          <button onClick={()=>openDebtorPay(d)}
+                            className="px-3 py-1.5 rounded-xl text-white text-xs font-semibold shadow hover:opacity-90 active:scale-95 transition-all"
+                            style={{backgroundImage:GRAD}}>💳 ชำระเงิน</button>
+                        )}
+                        <div className="flex gap-1.5">
+                          <button onClick={()=>openEditDebtor(d)}
+                            className="text-xs px-2.5 py-1.5 rounded-lg border border-purple-200 text-purple-700 hover:bg-purple-50 transition-all">✏️</button>
+                          <button onClick={()=>setDeleteConfirm(d)}
+                            className="text-xs px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-all">🗑️</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+        )}
+      </>)}
+
+      {/* ── Single Order Pay Modal ── */}
+      {payOrderModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6">
+            <h3 className="text-lg font-bold text-gray-800 mb-1">💳 รับชำระเงิน</h3>
+            <p className="text-sm text-gray-500 mb-4">{payOrderModal.debtor_name} · {payOrderModal.order_no}</p>
+            <div className="text-center rounded-2xl py-4 mb-5" style={{backgroundImage:GRAD}}>
+              <p className="text-white/80 text-sm">ยอดค้างชำระ</p>
+              <p className="text-3xl font-bold text-white mt-1">{formatCurrency(payOrderModal.total_amount)}</p>
+            </div>
+            <div className="grid grid-cols-3 gap-2 mb-5">
+              {PAY_METHODS.map(m=>(
+                <button key={m.value} onClick={()=>setPayMethod(m.value)}
+                  className={"p-3 rounded-xl border-2 text-center transition-all "+(payMethod===m.value?"border-purple-500 bg-purple-50":"border-gray-100 hover:border-purple-200")}>
+                  <div className="text-xl">{m.label}</div>
+                  <div className={"text-xs font-semibold mt-0.5 "+(payMethod===m.value?"text-purple-700":"text-gray-500")}>{m.sub}</div>
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button onClick={()=>setPayOrderModal(null)} className="btn-ghost flex-1">ยกเลิก</button>
+              <button onClick={handlePayOrder} disabled={paying}
+                className="flex-1 py-3 rounded-xl text-white font-bold text-sm shadow hover:opacity-90 disabled:opacity-50 transition-all"
+                style={{backgroundImage:GRAD}}>
+                {paying?"กำลังบันทึก...":"✅ ยืนยันรับชำระ"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Debtor Pay Modal (full / partial) ── */}
+      {debtorPayModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6">
+            <h3 className="text-lg font-bold text-gray-800 mb-1">💳 รับชำระเงิน</h3>
+            <p className="text-sm text-gray-500 mb-4">{debtorPayModal.name} · {debtorPayModal.order_count} บิล</p>
+
+            {/* Total banner */}
+            <div className="text-center rounded-2xl py-3 mb-4" style={{backgroundImage:GRAD}}>
+              <p className="text-white/80 text-xs">ยอดค้างชำระรวม</p>
+              <p className="text-2xl font-bold text-white">{formatCurrency(debtorPayModal.total_outstanding)}</p>
+            </div>
+
+            {/* Pay type selector */}
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              {[["full","✅ ชำระเต็มจำนวน"],["partial","✏️ ชำระจำนวนเงิน"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setDebtorPayType(v)}
+                  className={"py-2.5 rounded-xl border-2 text-sm font-semibold text-center transition-all "+(debtorPayType===v?"border-purple-500 bg-purple-50 text-purple-700":"border-gray-100 text-gray-500 hover:border-purple-200")}>
+                  {l}
+                </button>
+              ))}
+            </div>
+
+            {/* Partial amount input */}
+            {debtorPayType === "partial" && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-600 mb-1">จำนวนเงินที่ชำระ (บาท)</label>
+                <input type="number" min="1" max={debtorPayModal.total_outstanding}
+                  value={partialAmount} onChange={e=>setPartialAmount(e.target.value)}
+                  className="input-field text-xl font-bold text-center" placeholder="0.00" autoFocus />
+                {partialAmount && parseFloat(partialAmount) > 0 && (
+                  <p className="text-xs text-gray-500 mt-1.5 text-center">
+                    คงเหลือ: <span className="font-semibold text-amber-600">{formatCurrency(debtorPayModal.total_outstanding - parseFloat(partialAmount||0))}</span>
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Payment method */}
+            <div className="grid grid-cols-3 gap-2 mb-5">
+              {PAY_METHODS.map(m=>(
+                <button key={m.value} onClick={()=>setDebtorPayMethod(m.value)}
+                  className={"p-2.5 rounded-xl border-2 text-center transition-all "+(debtorPayMethod===m.value?"border-purple-500 bg-purple-50":"border-gray-100 hover:border-purple-200")}>
+                  <div className="text-lg">{m.label}</div>
+                  <div className={"text-xs font-semibold mt-0.5 "+(debtorPayMethod===m.value?"text-purple-700":"text-gray-500")}>{m.sub}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={()=>setDebtorPayModal(null)} className="btn-ghost flex-1">ยกเลิก</button>
+              <button onClick={handleDebtorPay} disabled={debtorPaying}
+                className="flex-1 py-3 rounded-xl text-white font-bold text-sm shadow hover:opacity-90 disabled:opacity-50 transition-all"
+                style={{backgroundImage:GRAD}}>
+                {debtorPaying ? "กำลังบันทึก..." : debtorPayType==="full" ? "✅ ชำระเต็มจำนวน" : "✅ ยืนยันชำระ"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Debtor Add/Edit Modal ── */}
+      {debtorModal !== null && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6">
+            <h3 className="text-lg font-bold text-gray-800 mb-4">
+              {debtorModal==="new" ? "➕ เพิ่มลูกหนี้ใหม่" : "✏️ แก้ไขข้อมูลลูกหนี้"}
+            </h3>
+            <form onSubmit={handleSaveDebtor} className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">ชื่อ <span className="text-red-500">*</span></label>
+                <input autoFocus required value={debtorForm.name} onChange={e=>setDebtorForm({...debtorForm,name:e.target.value})}
+                  className="input-field" placeholder="ชื่อ-นามสกุล / ชื่อบริษัท" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">เบอร์โทร</label>
+                <input value={debtorForm.phone} onChange={e=>setDebtorForm({...debtorForm,phone:e.target.value})}
+                  className="input-field" placeholder="เบอร์โทรศัพท์" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">หมายเหตุ</label>
+                <input value={debtorForm.note} onChange={e=>setDebtorForm({...debtorForm,note:e.target.value})}
+                  className="input-field" placeholder="หมายเหตุเพิ่มเติม" />
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={()=>setDebtorModal(null)} className="btn-ghost flex-1">ยกเลิก</button>
+                <button type="submit" disabled={savingDebtor} className="btn-primary flex-1 disabled:opacity-50">
+                  {savingDebtor?"กำลังบันทึก...":"💾 บันทึก"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Confirm ── */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6 text-center">
+            <p className="text-3xl mb-3">🗑️</p>
+            <p className="font-bold text-gray-800 mb-1">ลบ "{deleteConfirm.name}"?</p>
+            <p className="text-sm text-gray-500 mb-5">ไม่สามารถลบได้หากยังมีรายการค้างชำระ</p>
+            <div className="flex gap-3">
+              <button onClick={()=>setDeleteConfirm(null)} className="btn-ghost flex-1">ยกเลิก</button>
+              <button onClick={()=>handleDeleteDebtor(deleteConfirm)} className="btn-danger flex-1">🗑️ ยืนยันลบ</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,140 @@
+﻿const express = require("express");
+const db = require("../database/dbHelper");
+const { authenticate, authorize } = require("../middleware/auth");
+const { AppError } = require("../middleware/errorHandler");
+const { v4: uuidv4 } = require("uuid");
+const router = express.Router();
+
+router.post("/", authenticate, (req, res, next) => {
+  try {
+    const { items, customer_id, payment_method, discount = 0, remark } = req.body;
+    const settings = db.get("SELECT vat_rate FROM store_settings LIMIT 1");
+    const vatRate = parseFloat(settings?.vat_rate ?? process.env.VAT_RATE ?? 7) / 100;
+    let subTotal = 0; const orderItems = [];
+    for (const item of items) {
+      const product = db.get("SELECT id,selling_price,name FROM products WHERE id=? AND is_active=1", [item.product_id]);
+      if (!product) throw new AppError("Product not found: " + item.product_id, 400);
+      const unitPrice = item.unit_price || product.selling_price;
+      const itemDiscount = item.discount || 0;
+      const totalPrice = (unitPrice * item.quantity) - itemDiscount;
+      orderItems.push({ product_id: product.id, quantity: item.quantity, unit_price: unitPrice, discount: itemDiscount, total_price: totalPrice });
+      subTotal += totalPrice;
+    }
+    const taxableAmount = subTotal - discount;
+    const tax = Math.round(taxableAmount * vatRate * 100) / 100;
+    const totalAmount = taxableAmount + tax;
+    const orderNo = "POS-" + Date.now();
+    const orderId = uuidv4();
+    db.run("INSERT INTO orders (id,order_no,user_id,customer_id,sub_total,discount,tax,total_amount,payment_method,status,remark) VALUES (?,?,?,?,?,?,?,?,?,'completed',?)", [orderId, orderNo, req.user.id, customer_id||null, subTotal, discount, tax, totalAmount, payment_method, remark||null]);
+    for (const item of orderItems) {
+      db.run("INSERT INTO order_items (id,order_id,product_id,quantity,unit_price,discount,total_price) VALUES (?,?,?,?,?,?,?)", [uuidv4(), orderId, item.product_id, item.quantity, item.unit_price, item.discount, item.total_price]);
+      db.run("UPDATE inventory SET quantity=quantity-?,updated_at=datetime('now') WHERE product_id=?", [item.quantity, item.product_id]);
+      db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark) VALUES (?,?,?,'sale',?,?)", [uuidv4(), item.product_id, req.user.id, -item.quantity, "Sale - " + orderNo]);
+    }
+    db.run("INSERT INTO payments (id,order_id,payment_type,amount) VALUES (?,?,?,?)", [uuidv4(), orderId, payment_method, totalAmount]);
+    if (customer_id) {
+      const pts = Math.floor(totalAmount / 100);
+      if (pts > 0) db.run("UPDATE customers SET points=points+?,updated_at=datetime('now') WHERE id=?", [pts, customer_id]);
+    }
+    const order = db.get("SELECT * FROM orders WHERE id=?", [orderId]);
+    order.items = db.all("SELECT * FROM order_items WHERE order_id=?", [orderId]);
+    res.status(201).json({ success: true, data: order });
+  } catch (err) { next(err); }
+});
+
+router.get("/parked", authenticate, (req, res, next) => {
+  try {
+    const orders = db.all("SELECT * FROM orders WHERE status='parked' AND user_id=? ORDER BY created_at DESC", [req.user.id]);
+    for (const o of orders) { o.items = db.all("SELECT * FROM order_items WHERE order_id=?", [o.id]); }
+    res.json({ success: true, data: orders });
+  } catch (err) { next(err); }
+});
+
+router.post("/:id/park", authenticate, (req, res, next) => {
+  try {
+    const r = db.run("UPDATE orders SET status='parked',updated_at=datetime('now') WHERE id=? AND status='pending'", [req.params.id]);
+    if (r.changes === 0) return next(new AppError("Bill not found", 404));
+    res.json({ success: true, data: db.get("SELECT * FROM orders WHERE id=?", [req.params.id]) });
+  } catch (err) { next(err); }
+});
+
+router.post("/:id/refund", authenticate, authorize("admin","manager"), (req, res, next) => {
+  try {
+    const order = db.get("SELECT * FROM orders WHERE id=? AND status='completed'", [req.params.id]);
+    if (!order) throw new AppError("Bill not found", 404);
+    const items = db.all("SELECT * FROM order_items WHERE order_id=?", [req.params.id]);
+    for (const item of items) {
+      db.run("UPDATE inventory SET quantity=quantity+?,updated_at=datetime('now') WHERE product_id=?", [item.quantity, item.product_id]);
+      db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark) VALUES (?,?,?,'return',?,?)", [uuidv4(), item.product_id, req.user.id, item.quantity, "Refund - " + order.order_no]);
+    }
+    db.run("UPDATE orders SET status='refunded',updated_at=datetime('now') WHERE id=?", [req.params.id]);
+    res.json({ success: true, message: "Refund successful" });
+  } catch (err) { next(err); }
+});
+
+router.get("/", authenticate, (req, res, next) => {
+  try {
+    const { status, date_from, date_to, page = 1, limit = 20 } = req.query;
+    const offset = (page - 1) * limit;
+    let where = "WHERE 1=1"; const params = [];
+    if (status) { where += " AND o.status=?"; params.push(status); }
+    if (date_from) { where += " AND o.created_at>=?"; params.push(date_from); }
+    if (date_to) { where += " AND o.created_at<=?"; params.push(date_to); }
+    params.push(parseInt(limit), parseInt(offset));
+    const rows = db.all("SELECT o.*,u.full_name as cashier_name,c.name as customer_name FROM orders o LEFT JOIN users u ON o.user_id=u.id LEFT JOIN customers c ON o.customer_id=c.id " + where + " ORDER BY o.created_at DESC LIMIT ? OFFSET ?", params);
+    res.json({ success: true, data: rows });
+  } catch (err) { next(err); }
+});
+
+// DELETE order (void) — admin/manager only
+router.delete("/:id", authenticate, authorize("admin", "manager"), (req, res, next) => {
+  try {
+    const order = db.get("SELECT * FROM orders WHERE id=?", [req.params.id]);
+    if (!order) return next(new AppError("ไม่พบรายการ", 404));
+    if (order.status === "refunded") return next(new AppError("รายการนี้ถูกยกเลิกไปแล้ว", 400));
+    // Restore stock
+    const items = db.all("SELECT * FROM order_items WHERE order_id=?", [req.params.id]);
+    for (const item of items) {
+      db.run("UPDATE inventory SET quantity=quantity+?,updated_at=datetime('now') WHERE product_id=?", [item.quantity, item.product_id]);
+      db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark) VALUES (?,?,?,'return',?,?)", [uuidv4(), item.product_id, req.user.id, item.quantity, "Void - " + order.order_no]);
+    }
+    db.run("DELETE FROM order_items WHERE order_id=?", [req.params.id]);
+    db.run("DELETE FROM payments WHERE order_id=?", [req.params.id]);
+    db.run("DELETE FROM orders WHERE id=?", [req.params.id]);
+    res.json({ success: true, message: "ลบรายการสำเร็จ" });
+  } catch (err) { next(err); }
+});
+
+// PUT update order discount/remark — admin/manager only
+router.put("/:id", authenticate, authorize("admin", "manager"), (req, res, next) => {
+  try {
+    const { discount, remark, payment_method } = req.body;
+    const order = db.get("SELECT * FROM orders WHERE id=?", [req.params.id]);
+    if (!order) return next(new AppError("ไม่พบรายการ", 404));
+    if (order.status === "refunded") return next(new AppError("ไม่สามารถแก้ไขรายการที่ยกเลิกแล้ว", 400));
+    const settings = db.get("SELECT vat_rate FROM store_settings LIMIT 1");
+    const vatRate = parseFloat(settings?.vat_rate ?? 7) / 100;
+    const newDiscount = discount !== undefined ? parseFloat(discount) : order.discount;
+    const newPayment = payment_method || order.payment_method;
+    const newRemark = remark !== undefined ? remark : order.remark;
+    const taxable = order.sub_total - newDiscount;
+    const newTax = Math.round(taxable * vatRate * 100) / 100;
+    const newTotal = taxable + newTax;
+    db.run("UPDATE orders SET discount=?,tax=?,total_amount=?,payment_method=?,remark=?,updated_at=datetime('now') WHERE id=?",
+      [newDiscount, newTax, newTotal, newPayment, newRemark, req.params.id]);
+    const updated = db.get("SELECT o.*,u.full_name as cashier_name,c.name as customer_name FROM orders o LEFT JOIN users u ON o.user_id=u.id LEFT JOIN customers c ON o.customer_id=c.id WHERE o.id=?", [req.params.id]);
+    updated.items = db.all("SELECT oi.*,p.name as product_name,p.sku FROM order_items oi JOIN products p ON oi.product_id=p.id WHERE oi.order_id=?", [req.params.id]);
+    res.json({ success: true, data: updated });
+  } catch (err) { next(err); }
+});
+
+router.get("/:id", authenticate, (req, res, next) => {
+  try {
+    const order = db.get("SELECT o.*,u.full_name as cashier_name,c.name as customer_name FROM orders o LEFT JOIN users u ON o.user_id=u.id LEFT JOIN customers c ON o.customer_id=c.id WHERE o.id=?", [req.params.id]);
+    if (!order) return next(new AppError("Order not found", 404));
+    order.items = db.all("SELECT oi.*,p.name as product_name,p.sku FROM order_items oi JOIN products p ON oi.product_id=p.id WHERE oi.order_id=?", [req.params.id]);
+    res.json({ success: true, data: order });
+  } catch (err) { next(err); }
+});
+
+module.exports = router;

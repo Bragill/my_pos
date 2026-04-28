@@ -1,0 +1,30 @@
+﻿const fs = require('fs');
+const path = require('path');
+
+// Try to use mkcert if available, otherwise use self-signed
+const publicDir = path.join(__dirname, 'public');
+const certPath = path.join(publicDir, 'rootCA.crt');
+const keyPath = path.join(publicDir, 'rootCA.key');
+
+// Create public directory if it doesn't exist
+if (!fs.existsSync(publicDir)) {
+  fs.mkdirSync(publicDir, { recursive: true });
+}
+
+// Check if certificates already exist
+if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+  console.log('SSL certificates already exist.');
+  process.exit(0);
+}
+
+// Copy from frontend if they exist
+const frontendCertPath = path.join(__dirname, '../frontend/public/rootCA.crt');
+const frontendKeyPath = path.join(__dirname, '../frontend/public/rootCA.key');
+
+if (fs.existsSync(frontendCertPath) && fs.existsSync(frontendKeyPath)) {
+  fs.copyFileSync(frontendCertPath, certPath);
+  fs.copyFileSync(frontendKeyPath, keyPath);
+  console.log('SSL certificates copied from frontend!');
+} else {
+  console.log('Please generate certificates in the frontend first by running: npm run gen-cert');
+}

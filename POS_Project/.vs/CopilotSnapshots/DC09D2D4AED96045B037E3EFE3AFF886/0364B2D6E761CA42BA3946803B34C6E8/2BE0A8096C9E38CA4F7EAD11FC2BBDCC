@@ -1,0 +1,149 @@
+﻿import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import toast from 'react-hot-toast';
+
+export default function LoginPage() {
+  const [mode, setMode] = useState('password'); // 'password' | 'pin'
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
+  const [loading, setLoading] = useState(false);
+  const { login, pinLogin } = useAuth();
+  const navigate = useNavigate();
+
+  const handlePasswordLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      await login(username, password);
+      toast.success('เข้าสู่ระบบสำเร็จ');
+      navigate('/pos');
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'เข้าสู่ระบบไม่สำเร็จ');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePinLogin = async () => {
+    if (pin.length < 4) return;
+    setLoading(true);
+    try {
+      await pinLogin(pin);
+      toast.success('เข้าสู่ระบบสำเร็จ');
+      navigate('/pos');
+    } catch (err) {
+      toast.error('PIN Code ไม่ถูกต้อง');
+      setPin('');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePinPress = (digit) => {
+    if (pin.length >= 6) return;
+    const newPin = pin + digit;
+    setPin(newPin);
+    if (newPin.length >= 4) {
+      setTimeout(() => {
+        handlePinLogin();
+      }, 100);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold text-gray-800">🛒 POS</h1>
+          <p className="text-gray-500 mt-2">ระบบขายหน้าร้าน</p>
+        </div>
+
+        {/* Mode Toggle */}
+        <div className="flex bg-gray-100 rounded-lg p-1 mb-6">
+          <button
+            onClick={() => setMode('password')}
+            className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+              mode === 'password' ? 'bg-white shadow text-blue-600' : 'text-gray-500'
+            }`}
+          >
+            ชื่อผู้ใช้/รหัสผ่าน
+          </button>
+          <button
+            onClick={() => setMode('pin')}
+            className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+              mode === 'pin' ? 'bg-white shadow text-blue-600' : 'text-gray-500'
+            }`}
+          >
+            PIN Code
+          </button>
+        </div>
+
+        {mode === 'password' ? (
+          <form onSubmit={handlePasswordLogin} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ชื่อผู้ใช้</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="input-field"
+                placeholder="กรอกชื่อผู้ใช้"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">รหัสผ่าน</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input-field"
+                placeholder="กรอกรหัสผ่าน"
+                required
+              />
+            </div>
+            <button type="submit" disabled={loading} className="btn-primary w-full">
+              {loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
+            </button>
+          </form>
+        ) : (
+          <div>
+            {/* PIN Display */}
+            <div className="flex justify-center gap-3 mb-6">
+              {[0, 1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className={`w-4 h-4 rounded-full ${
+                    pin.length > i ? 'bg-blue-600' : 'bg-gray-200'
+                  }`}
+                />
+              ))}
+            </div>
+
+            {/* PIN Pad */}
+            <div className="grid grid-cols-3 gap-3">
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => {
+                    if (key === 'del') setPin(pin.slice(0, -1));
+                    else if (key !== null) handlePinPress(String(key));
+                  }}
+                  disabled={key === null}
+                  className={`h-16 rounded-xl text-xl font-semibold transition-all
+                    ${key === null ? 'invisible' : ''}
+                    ${key === 'del' ? 'bg-red-50 text-red-500 hover:bg-red-100' : 'bg-gray-50 hover:bg-gray-100 active:bg-gray-200'}
+                  `}
+                >
+                  {key === 'del' ? '⌫' : key}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

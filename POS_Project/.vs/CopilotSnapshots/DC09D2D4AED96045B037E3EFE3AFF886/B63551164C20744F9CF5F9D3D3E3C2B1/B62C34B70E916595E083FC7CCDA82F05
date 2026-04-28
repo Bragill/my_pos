@@ -1,0 +1,47 @@
+﻿const initSqlJs = require("sql.js");
+const fs = require("fs");
+const path = require("path");
+
+const DB_PATH = path.join(__dirname, "..", "..", "pos_system.db");
+
+let db = null;
+
+async function getDb() {
+  if (db) return db;
+  const SQL = await initSqlJs();
+  if (fs.existsSync(DB_PATH)) {
+    const buf = fs.readFileSync(DB_PATH);
+    db = new SQL.Database(buf);
+  } else {
+    db = new SQL.Database();
+  }
+  db.run("PRAGMA foreign_keys = ON");
+
+  // Ensure schema is up to date (safe to run every startup)
+  db.run(`CREATE TABLE IF NOT EXISTS debtors (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, note TEXT,
+    created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now'))
+  )`);
+  try { db.run("ALTER TABLE orders ADD COLUMN debtor_name TEXT"); } catch(e) {}
+  try { db.run("ALTER TABLE orders ADD COLUMN debtor_id TEXT"); } catch(e) {}
+  saveDb();
+
+  return db;
+}
+
+function saveDb() {
+  if (db) {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(DB_PATH, buffer);
+  }
+}
+
+// Auto-save every 5 seconds
+setInterval(saveDb, 5000);
+
+// Save on exit
+process.on("exit", saveDb);
+process.on("SIGINT", () => { saveDb(); process.exit(); });
+
+module.exports = { getDb, saveDb };

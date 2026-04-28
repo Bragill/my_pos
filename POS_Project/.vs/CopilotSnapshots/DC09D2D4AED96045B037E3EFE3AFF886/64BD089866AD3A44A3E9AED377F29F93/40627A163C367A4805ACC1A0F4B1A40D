@@ -1,0 +1,165 @@
+﻿import { useEffect, useRef, useState } from 'react';
+
+/**
+ * BarcodeScanner — uses native BarcodeDetector API (Chrome/Android)
+ * with fallback message if not supported.
+ */
+export default function BarcodeScanner({ onDetected, onClose }) {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const rafRef = useRef(null);
+  const [error, setError] = useState(null);
+  const [scanning, setScanning] = useState(false);
+  const [cameras, setCameras] = useState([]);
+  const [selectedCamera, setSelectedCamera] = useState('');
+
+  const supported = typeof window !== 'undefined' && 'BarcodeDetector' in window;
+
+  useEffect(() => {
+    if (!supported) return;
+    // List available cameras
+    navigator.mediaDevices.enumerateDevices().then(devices => {
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      setCameras(cams);
+      // Prefer back camera
+      const back = cams.find(c => /back|rear|environment/i.test(c.label));
+      setSelectedCamera(back?.deviceId || cams[0]?.deviceId || '');
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!supported || !selectedCamera) return;
+    startCamera(selectedCamera);
+    return () => stopCamera();
+  }, [selectedCamera]);
+
+  const startCamera = async (deviceId) => {
+    stopCamera();
+    setError(null);
+    setScanning(true);
+    try {
+      const constraints = {
+        video: deviceId
+          ? { deviceId: { exact: deviceId }, facingMode: 'environment' }
+          : { facingMode: 'environment' },
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+      detectLoop();
+    } catch (err) {
+      setError('ไม่สามารถเปิดกล้องได้: ' + (err.message || err));
+      setScanning(false);
+    }
+  };
+
+  const detectLoop = async () => {
+    const detector = new window.BarcodeDetector({
+      formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e', 'itf', 'pdf417'],
+    });
+    const tick = async () => {
+      if (!videoRef.current || videoRef.current.readyState < 2) {
+        rafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+      try {
+        const codes = await detector.detect(videoRef.current);
+        if (codes.length > 0) {
+          stopCamera();
+          onDetected(codes[0].rawValue);
+          return;
+        }
+      } catch {}
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  };
+
+  const stopCamera = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    setScanning(false);
+  };
+
+  const handleClose = () => { stopCamera(); onClose(); };
+
+  return (
+    <div className="fixed inset-0 bg-black/90 flex flex-col items-center justify-center z-[60] p-4">
+      <div className="w-full max-w-sm">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-white font-bold text-lg">📷 สแกนบาร์โค้ด</h3>
+          <button onClick={handleClose}
+            className="w-9 h-9 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center">✕</button>
+        </div>
+
+        {!supported ? (
+          <div className="bg-amber-50 rounded-2xl p-6 text-center">
+            <p className="text-3xl mb-3">⚠️</p>
+            <p className="font-semibold text-amber-800 mb-2">บราวเซอร์ไม่รองรับการสแกน</p>
+            <p className="text-sm text-amber-700">กรุณาใช้ Chrome บน Android หรือ Safari บน iOS 17+</p>
+          </div>
+        ) : error ? (
+          <div className="bg-red-50 rounded-2xl p-6 text-center">
+            <p className="text-3xl mb-3">❌</p>
+            <p className="font-semibold text-red-700 mb-2">{error}</p>
+            <button onClick={() => startCamera(selectedCamera)}
+              className="btn-primary mt-2">ลองใหม่</button>
+          </div>
+        ) : (
+          <>
+            {/* Camera selector */}
+            {cameras.length > 1 && (
+              <select value={selectedCamera} onChange={e => setSelectedCamera(e.target.value)}
+                className="w-full bg-white/10 text-white border border-white/20 rounded-xl px-3 py-2 text-sm mb-3">
+                {cameras.map((c, i) => (
+                  <option key={c.deviceId} value={c.deviceId} className="text-gray-800">
+                    {c.label || `กล้อง ${i + 1}`}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {/* Viewfinder */}
+            <div className="relative rounded-2xl overflow-hidden bg-black aspect-square w-full">
+              <video ref={videoRef} autoPlay playsInline muted
+                className="w-full h-full object-cover" />
+              {/* Scan guide overlay */}
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-56 h-40 relative">
+                  {/* Corner borders */}
+                  {[
+                    'top-0 left-0 border-t-4 border-l-4 rounded-tl-xl',
+                    'top-0 right-0 border-t-4 border-r-4 rounded-tr-xl',
+                    'bottom-0 left-0 border-b-4 border-l-4 rounded-bl-xl',
+                    'bottom-0 right-0 border-b-4 border-r-4 rounded-br-xl',
+                  ].map((cls, i) => (
+                    <div key={i} className={`absolute w-8 h-8 border-white ${cls}`} />
+                  ))}
+                  {/* Scanning line animation */}
+                  <div className="absolute inset-x-2 h-0.5 bg-green-400/80 animate-scan top-1/2" />
+                </div>
+              </div>
+              {/* Scanning indicator */}
+              <div className="absolute bottom-3 left-0 right-0 text-center">
+                <span className="text-white/80 text-xs bg-black/40 px-3 py-1 rounded-full">
+                  {scanning ? '🔍 กำลังสแกน...' : '⏳ เปิดกล้อง...'}
+                </span>
+              </div>
+            </div>
+
+            <p className="text-white/60 text-xs text-center mt-3">
+              วางบาร์โค้ดในกรอบเพื่อสแกน — รองรับ EAN-13, Code-128, QR Code
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

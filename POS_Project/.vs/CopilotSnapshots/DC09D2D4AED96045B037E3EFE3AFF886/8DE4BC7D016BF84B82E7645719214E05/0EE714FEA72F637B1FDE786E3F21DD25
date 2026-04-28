@@ -1,0 +1,82 @@
+﻿const express = require("express");
+const db = require("../database/dbHelper");
+const { authenticate, authorize } = require("../middleware/auth");
+const { AppError } = require("../middleware/errorHandler");
+const { v4: uuidv4 } = require("uuid");
+const router = express.Router();
+
+router.get("/", authenticate, (req, res, next) => {
+  try {
+    const { search, category_id, page = 1, limit = 50, featured } = req.query;
+    const offset = (page - 1) * limit;
+    let where = "WHERE p.is_active = 1";
+    const params = [];
+    if (search) { where += " AND (p.name LIKE ? OR p.barcode = ? OR p.sku LIKE ?)"; params.push("%"+search+"%", search, "%"+search+"%"); }
+    if (category_id) { where += " AND p.category_id = ?"; params.push(category_id); }
+    if (featured === "true") { where += " AND p.is_featured = 1"; }
+    const countRow = db.get("SELECT COUNT(*) as cnt FROM products p " + where, params);
+    params.push(parseInt(limit), parseInt(offset));
+    const rows = db.all("SELECT p.*, c.name as category_name, COALESCE(i.quantity,0) as stock_quantity FROM products p LEFT JOIN categories c ON p.category_id=c.id LEFT JOIN inventory i ON p.id=i.product_id " + where + " ORDER BY p.is_featured DESC, p.name ASC LIMIT ? OFFSET ?", params);
+    res.json({ success: true, data: rows, pagination: { page: parseInt(page), limit: parseInt(limit), total: countRow ? countRow.cnt : 0 } });
+  } catch (err) { next(err); }
+});
+
+router.get("/barcode/:barcode", authenticate, (req, res, next) => {
+  try {
+    const row = db.get("SELECT p.*, c.name as category_name, COALESCE(i.quantity,0) as stock_quantity FROM products p LEFT JOIN categories c ON p.category_id=c.id LEFT JOIN inventory i ON p.id=i.product_id WHERE p.barcode=? AND p.is_active=1", [req.params.barcode]);
+    if (!row) return res.status(404).json({ success: false, error: { message: "Product not found" } });
+    res.json({ success: true, data: row });
+  } catch (err) { next(err); }
+});
+
+// Generate unique SKU — must be before /:id
+router.get("/generate-sku", authenticate, (req, res, next) => {
+  try {
+    const { prefix = "PRD" } = req.query;
+    let sku, exists;
+    do {
+      const num = String(Math.floor(Math.random() * 900000) + 100000);
+      sku = `${prefix.toUpperCase()}${num}`;
+      exists = db.get("SELECT id FROM products WHERE sku=?", [sku]);
+    } while (exists);
+    res.json({ success: true, data: { sku } });
+  } catch (err) { next(err); }
+});
+
+router.get("/:id", authenticate, (req, res, next) => {
+  try {
+    const row = db.get("SELECT p.*, c.name as category_name, COALESCE(i.quantity,0) as stock_quantity FROM products p LEFT JOIN categories c ON p.category_id=c.id LEFT JOIN inventory i ON p.id=i.product_id WHERE p.id=?", [req.params.id]);
+    if (!row) return res.status(404).json({ success: false, error: { message: "Product not found" } });
+    res.json({ success: true, data: row });
+  } catch (err) { next(err); }
+});
+
+router.post("/", authenticate, authorize("admin","manager"), (req, res, next) => {
+  try {
+    const { sku, barcode, name, description, category_id, cost_price, selling_price, image_url, is_featured, reorder_level } = req.body;
+    if (!sku) return next(new AppError("SKU is required", 400));
+    // Fallback to "อื่นๆ" category if none selected
+    let resolvedCategoryId = category_id || null;
+    if (!resolvedCategoryId) {
+      const other = db.get("SELECT id FROM categories WHERE name='อื่นๆ' LIMIT 1");
+      if (other) resolvedCategoryId = other.id;
+    }
+    const id = uuidv4();
+    db.run("INSERT INTO products (id,sku,barcode,name,description,category_id,cost_price,selling_price,image_url,is_featured) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      [id, sku, barcode||null, name, description||null, resolvedCategoryId, cost_price, selling_price, image_url||null, is_featured?1:0]);
+    db.run("INSERT INTO inventory (product_id,quantity,reorder_level) VALUES (?,0,?)", [id, reorder_level||5]);
+    const product = db.get("SELECT * FROM products WHERE id=?", [id]);
+    res.status(201).json({ success: true, data: product });
+  } catch (err) { next(err); }
+});
+
+router.put("/:id", authenticate, authorize("admin","manager"), (req, res, next) => {
+  try {
+    const { sku, barcode, name, description, category_id, cost_price, selling_price, image_url, is_active, is_featured } = req.body;
+    db.run("UPDATE products SET sku=?,barcode=?,name=?,description=?,category_id=?,cost_price=?,selling_price=?,image_url=?,is_active=?,is_featured=?,updated_at=datetime('now') WHERE id=?", [sku, barcode, name, description, category_id, cost_price, selling_price, image_url, is_active?1:0, is_featured?1:0, req.params.id]);
+    const product = db.get("SELECT * FROM products WHERE id=?", [req.params.id]);
+    res.json({ success: true, data: product });
+  } catch (err) { next(err); }
+});
+
+module.exports = router;

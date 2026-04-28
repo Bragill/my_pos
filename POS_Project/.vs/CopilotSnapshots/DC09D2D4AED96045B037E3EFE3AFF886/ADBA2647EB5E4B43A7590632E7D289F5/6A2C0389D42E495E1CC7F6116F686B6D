@@ -1,0 +1,152 @@
+﻿const express = require('express');
+const db = require('../database/connection');
+const { authenticate, authorize } = require('../middleware/auth');
+
+const router = express.Router();
+
+// ดูสต๊อกทั้งหมด
+router.get('/', authenticate, async (req, res, next) => {
+  try {
+    const { low_stock } = req.query;
+    let query = `
+      SELECT p.id, p.sku, p.barcode, p.name, p.cost_price, p.selling_price,
+             i.quantity, i.reorder_level, c.name as category_name
+      FROM inventory i
+      JOIN products p ON i.product_id = p.id
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.is_active = true`;
+
+    if (low_stock === 'true') {
+      query += ' AND i.quantity <= i.reorder_level';
+    }
+
+    query += ' ORDER BY p.name';
+
+    const result = await db.query(query);
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// รับสินค้าเข้า
+router.post('/receive', authenticate, authorize('admin', 'manager'), async (req, res, next) => {
+  const client = await db.pool.connect();
+  try {
+    const { product_id, quantity, remark } = req.body;
+
+    await client.query('BEGIN');
+
+    await client.query(
+      'UPDATE inventory SET quantity = quantity + $1, updated_at = NOW() WHERE product_id = $2',
+      [quantity, product_id]
+    );
+
+    await client.query(
+      `INSERT INTO stock_transactions (product_id, user_id, type, quantity, remark)
+       VALUES ($1, $2, 'receive', $3, $4)`,
+      [product_id, req.user.id, quantity, remark]
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'รับสินค้าเข้าสำเร็จ' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
+// เบิกสินค้าออก
+router.post('/issue', authenticate, authorize('admin', 'manager'), async (req, res, next) => {
+  const client = await db.pool.connect();
+  try {
+    const { product_id, quantity, remark } = req.body;
+
+    await client.query('BEGIN');
+
+    await client.query(
+      'UPDATE inventory SET quantity = quantity - $1, updated_at = NOW() WHERE product_id = $2',
+      [quantity, product_id]
+    );
+
+    await client.query(
+      `INSERT INTO stock_transactions (product_id, user_id, type, quantity, remark)
+       VALUES ($1, $2, 'issue', $3, $4)`,
+      [product_id, req.user.id, -quantity, remark]
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'เบิกสินค้าออกสำเร็จ' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
+// ปรับปรุงสต๊อก (Stock Adjust)
+router.post('/adjust', authenticate, authorize('admin', 'manager'), async (req, res, next) => {
+  const client = await db.pool.connect();
+  try {
+    const { product_id, new_quantity, remark } = req.body;
+
+    await client.query('BEGIN');
+
+    const current = await client.query('SELECT quantity FROM inventory WHERE product_id = $1', [product_id]);
+    const diff = new_quantity - (current.rows[0]?.quantity || 0);
+
+    await client.query(
+      'UPDATE inventory SET quantity = $1, updated_at = NOW() WHERE product_id = $2',
+      [new_quantity, product_id]
+    );
+
+    await client.query(
+      `INSERT INTO stock_transactions (product_id, user_id, type, quantity, remark)
+       VALUES ($1, $2, 'adjust', $3, $4)`,
+      [product_id, req.user.id, diff, remark || 'ปรับปรุงสต๊อก']
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'ปรับปรุงสต๊อกสำเร็จ' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
+// ประวัติเคลื่อนไหวสต๊อก
+router.get('/transactions', authenticate, async (req, res, next) => {
+  try {
+    const { product_id, page = 1, limit = 50 } = req.query;
+    const offset = (page - 1) * limit;
+    const params = [parseInt(limit), parseInt(offset)];
+    let where = '';
+
+    if (product_id) {
+      params.push(product_id);
+      where = `WHERE st.product_id = $${params.length}`;
+    }
+
+    const result = await db.query(
+      `SELECT st.*, p.name as product_name, u.full_name as user_name
+       FROM stock_transactions st
+       JOIN products p ON st.product_id = p.id
+       JOIN users u ON st.user_id = u.id
+       ${where}
+       ORDER BY st.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      params
+    );
+
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+module.exports = router;

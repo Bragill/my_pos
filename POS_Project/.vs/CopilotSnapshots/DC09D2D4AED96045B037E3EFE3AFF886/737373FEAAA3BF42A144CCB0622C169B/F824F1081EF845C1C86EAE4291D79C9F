@@ -1,0 +1,49 @@
+﻿const express = require("express");
+const db = require("../database/dbHelper");
+const { authenticate } = require("../middleware/auth");
+const { AppError } = require("../middleware/errorHandler");
+const { v4: uuidv4 } = require("uuid");
+const router = express.Router();
+
+// GET all debtors
+router.get("/", authenticate, (req, res, next) => {
+  try {
+    const debtors = db.all("SELECT * FROM debtors ORDER BY name ASC");
+    res.json({ success: true, data: debtors });
+  } catch (err) { next(err); }
+});
+
+// CREATE debtor
+router.post("/", authenticate, (req, res, next) => {
+  try {
+    const { name, phone, note } = req.body;
+    if (!name?.trim()) return next(new AppError("กรุณากรอกชื่อ", 400));
+    const existing = db.get("SELECT id FROM debtors WHERE name=?", [name.trim()]);
+    if (existing) return next(new AppError("ชื่อนี้มีอยู่แล้ว", 400));
+    const id = uuidv4();
+    db.run("INSERT INTO debtors (id,name,phone,note) VALUES (?,?,?,?)", [id, name.trim(), phone||null, note||null]);
+    res.status(201).json({ success: true, data: db.get("SELECT * FROM debtors WHERE id=?", [id]) });
+  } catch (err) { next(err); }
+});
+
+// UPDATE debtor
+router.put("/:id", authenticate, (req, res, next) => {
+  try {
+    const { name, phone, note } = req.body;
+    if (!name?.trim()) return next(new AppError("กรุณากรอกชื่อ", 400));
+    db.run("UPDATE debtors SET name=?,phone=?,note=?,updated_at=datetime('now') WHERE id=?", [name.trim(), phone||null, note||null, req.params.id]);
+    res.json({ success: true, data: db.get("SELECT * FROM debtors WHERE id=?", [req.params.id]) });
+  } catch (err) { next(err); }
+});
+
+// DELETE debtor
+router.delete("/:id", authenticate, (req, res, next) => {
+  try {
+    const used = db.get("SELECT id FROM orders WHERE debtor_id=? AND status='outstanding'", [req.params.id]);
+    if (used) return next(new AppError("ไม่สามารถลบได้ เนื่องจากยังมีรายการค้างชำระอยู่", 400));
+    db.run("DELETE FROM debtors WHERE id=?", [req.params.id]);
+    res.json({ success: true, message: "ลบสำเร็จ" });
+  } catch (err) { next(err); }
+});
+
+module.exports = router;

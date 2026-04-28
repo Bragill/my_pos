@@ -1,0 +1,417 @@
+﻿import { useState, useEffect } from 'react';
+import { useCart } from '../contexts/CartContext';
+import { formatCurrency } from '../utils/format';
+import api from '../services/api';
+import { savePendingOrder, cacheProducts, getCachedProducts } from '../services/offlineDB';
+import toast from 'react-hot-toast';
+
+export default function POSPage() {
+  const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [paymentModal, setPaymentModal] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [cashReceived, setCashReceived] = useState('');
+  const [mobileTab, setMobileTab] = useState('products'); // 'products' | 'cart'
+
+  const {
+    cart, subTotal, tax, total,
+    addItem, removeItem, updateQuantity, clearCart,
+    setBillDiscount,
+  } = useCart();
+
+  // โหลดสินค้าและหมวดหมู่
+  useEffect(() => {
+    loadProducts();
+    loadCategories();
+  }, []);
+
+  const loadProducts = async () => {
+    try {
+      const res = await api.get('/products', { params: { limit: 200 } });
+      setProducts(res.data.data);
+      cacheProducts(res.data.data);
+    } catch {
+      // ออฟไลน์ - ใช้แคช
+      const cached = await getCachedProducts();
+      setProducts(cached);
+    }
+  };
+
+  const loadCategories = async () => {
+    try {
+      const res = await api.get('/categories');
+      setCategories(res.data.data);
+    } catch {
+      setCategories([]);
+    }
+  };
+
+  // กรองสินค้า
+  const filteredProducts = products.filter((p) => {
+    const matchSearch = !searchQuery ||
+      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      p.barcode?.includes(searchQuery) ||
+      p.sku?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchCategory = !selectedCategory || p.category_id === selectedCategory;
+    return matchSearch && matchCategory;
+  });
+
+  // คีย์ลัด
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'F2') { e.preventDefault(); document.getElementById('search-input')?.focus(); }
+      if (e.key === 'F9') { e.preventDefault(); if (cart.items.length > 0) setPaymentModal(true); }
+      if (e.key === 'Escape') { setPaymentModal(false); setSearchQuery(''); }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [cart.items]);
+
+  // ชำระเงิน
+  const handlePayment = async () => {
+    const orderData = {
+      items: cart.items.map((i) => ({
+        product_id: i.product_id,
+        quantity: i.quantity,
+        unit_price: i.selling_price,
+        discount: i.discount || 0,
+      })),
+      customer_id: cart.customerId,
+      payment_method: paymentMethod,
+      discount: cart.discount,
+    };
+
+    try {
+      if (navigator.onLine) {
+        await api.post('/orders', orderData);
+        toast.success('ชำระเงินสำเร็จ!');
+      } else {
+        await savePendingOrder(orderData);
+        toast.success('บันทึกออฟไลน์ - จะซิงค์เมื่อออนไลน์');
+      }
+
+      clearCart();
+      setPaymentModal(false);
+      setCashReceived('');
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'เกิดข้อผิดพลาด');
+    }
+  };
+
+  const change = parseFloat(cashReceived) - total;
+
+  // Add item and show cart badge on mobile
+  const handleAddItem = (product) => {
+    addItem(product);
+  };
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-56px)]">
+
+      {/* ==================== DESKTOP LAYOUT (md+) ==================== */}
+      <div className="hidden md:flex flex-1 min-h-0">
+        {/* Left 65% - Products */}
+        <div className="w-[65%] flex flex-col border-r border-gray-200">
+          {/* Search */}
+          <div className="p-3 border-b border-gray-100">
+            <input
+              id="search-input"
+              type="text"
+              placeholder="🔍 ค้นหาสินค้า / สแกนบาร์โค้ด (F2)"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="input-field"
+              autoComplete="off"
+            />
+          </div>
+          {/* Categories */}
+          <div className="flex gap-2 p-3 overflow-x-auto border-b border-gray-100">
+            <button
+              onClick={() => setSelectedCategory(null)}
+              className={`category-tab whitespace-nowrap ${!selectedCategory ? 'category-tab-active' : 'category-tab-inactive'}`}
+            >ทั้งหมด</button>
+            {categories.map((cat) => (
+              <button key={cat.id} onClick={() => setSelectedCategory(cat.id)}
+                className={`category-tab whitespace-nowrap ${selectedCategory === cat.id ? 'category-tab-active' : 'category-tab-inactive'}`}
+              >{cat.name}</button>
+            ))}
+          </div>
+          {/* Product Grid */}
+          <div className="flex-1 overflow-y-auto p-3">
+            <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+              {filteredProducts.map((product) => (
+                <button key={product.id} onClick={() => handleAddItem(product)} className="product-grid-item">
+                  <div className="w-12 h-12 bg-gray-100 rounded mb-1 flex items-center justify-center text-2xl">
+                    {product.image_url ? <img src={product.image_url} alt="" className="w-full h-full object-cover rounded" /> : '📦'}
+                  </div>
+                  <span className="text-xs font-medium text-gray-800 text-center line-clamp-2">{product.name}</span>
+                  <span className="text-xs font-bold text-blue-600 mt-1">{formatCurrency(product.selling_price)}</span>
+                </button>
+              ))}
+            </div>
+            {filteredProducts.length === 0 && <div className="text-center text-gray-400 mt-12">ไม่พบสินค้า</div>}
+          </div>
+        </div>
+
+        {/* Right 35% - Cart */}
+        <div className="w-[35%] flex flex-col bg-white">
+          <div className="p-3 border-b border-gray-100">
+            <h2 className="font-semibold text-gray-800">🧾 ตะกร้าสินค้า</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {cart.items.length === 0 ? (
+              <div className="text-center text-gray-400 mt-12 text-sm">ยังไม่มีสินค้าในตะกร้า</div>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {cart.items.map((item) => (
+                  <div key={item.product_id} className="p-3 flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">{item.name}</p>
+                      <p className="text-xs text-gray-500">{formatCurrency(item.selling_price)}</p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => updateQuantity(item.product_id, item.quantity - 1)} className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-sm font-bold">−</button>
+                      <span className="w-7 text-center text-sm font-semibold">{item.quantity}</span>
+                      <button onClick={() => updateQuantity(item.product_id, item.quantity + 1)} className="w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-sm font-bold">+</button>
+                    </div>
+                    <span className="text-sm font-semibold w-16 text-right">{formatCurrency(item.selling_price * item.quantity)}</span>
+                    <button onClick={() => removeItem(item.product_id)} className="text-red-400 hover:text-red-600 ml-1 text-lg">✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* Summary */}
+          <div className="border-t border-gray-200 p-3 space-y-1">
+            <div className="flex justify-between text-sm text-gray-600"><span>ยอดรวม</span><span>{formatCurrency(subTotal)}</span></div>
+            {cart.discount > 0 && <div className="flex justify-between text-sm text-red-500"><span>ส่วนลด</span><span>-{formatCurrency(cart.discount)}</span></div>}
+            <div className="flex justify-between text-sm text-gray-600"><span>VAT 7%</span><span>{formatCurrency(tax)}</span></div>
+            <div className="flex justify-between text-xl font-bold text-gray-900 pt-2 border-t">
+              <span>รวมทั้งสิ้น</span>
+              <span className="text-blue-600">{formatCurrency(total)}</span>
+            </div>
+          </div>
+          <div className="p-3 space-y-2">
+            <button onClick={() => setPaymentModal(true)} disabled={cart.items.length === 0}
+              className="btn-success w-full disabled:opacity-50 disabled:cursor-not-allowed text-base py-3">
+              💳 ชำระเงิน (F9)
+            </button>
+            <div className="flex gap-2">
+              <button onClick={clearCart} className="btn-danger flex-1 text-sm !py-2">ยกเลิก</button>
+              <button className="btn-ghost flex-1 text-sm !py-2">พักบิล</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ==================== MOBILE LAYOUT (< md) ==================== */}
+      <div className="flex flex-col flex-1 min-h-0 md:hidden">
+
+        {/* Mobile Tab Bar */}
+        <div className="flex border-b border-gray-200 bg-white">
+          <button
+            onClick={() => setMobileTab('products')}
+            className={`flex-1 py-3 text-sm font-semibold transition-colors ${mobileTab === 'products' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-500'}`}
+          >🛍️ สินค้า</button>
+          <button
+            onClick={() => setMobileTab('cart')}
+            className={`flex-1 py-3 text-sm font-semibold transition-colors relative ${mobileTab === 'cart' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-500'}`}
+          >
+            🧾 ตะกร้า
+            {cart.items.length > 0 && (
+              <span className="absolute top-2 right-6 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">
+                {cart.items.reduce((s, i) => s + i.quantity, 0)}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Mobile: Products Tab */}
+        {mobileTab === 'products' && (
+          <div className="flex flex-col flex-1 min-h-0">
+            {/* Search */}
+            <div className="p-3 border-b border-gray-100 bg-white">
+              <input
+                id="search-input"
+                type="text"
+                placeholder="🔍 ค้นหา / สแกนบาร์โค้ด"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="input-field text-base"
+                autoComplete="off"
+              />
+            </div>
+            {/* Categories - horizontal scroll */}
+            <div className="flex gap-2 px-3 py-2 overflow-x-auto border-b border-gray-100 bg-white">
+              <button onClick={() => setSelectedCategory(null)}
+                className={`category-tab whitespace-nowrap flex-shrink-0 !text-sm !px-4 !py-2 ${!selectedCategory ? 'category-tab-active' : 'category-tab-inactive'}`}
+              >ทั้งหมด</button>
+              {categories.map((cat) => (
+                <button key={cat.id} onClick={() => setSelectedCategory(cat.id)}
+                  className={`category-tab whitespace-nowrap flex-shrink-0 !text-sm !px-4 !py-2 ${selectedCategory === cat.id ? 'category-tab-active' : 'category-tab-inactive'}`}
+                >{cat.name}</button>
+              ))}
+            </div>
+            {/* Product Grid - 2 cols on mobile, larger cards */}
+            <div className="flex-1 overflow-y-auto p-3 bg-gray-50">
+              <div className="grid grid-cols-2 gap-3">
+                {filteredProducts.map((product) => (
+                  <button key={product.id} onClick={() => { handleAddItem(product); setMobileTab('cart'); }}
+                    className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col items-center active:scale-95 transition-transform"
+                  >
+                    <div className="w-16 h-16 bg-gray-100 rounded-xl mb-2 flex items-center justify-center text-3xl">
+                      {product.image_url ? <img src={product.image_url} alt="" className="w-full h-full object-cover rounded-xl" /> : '📦'}
+                    </div>
+                    <span className="text-sm font-medium text-gray-800 text-center line-clamp-2 leading-tight mb-1">{product.name}</span>
+                    <span className="text-base font-bold text-blue-600">{formatCurrency(product.selling_price)}</span>
+                  </button>
+                ))}
+              </div>
+              {filteredProducts.length === 0 && <div className="text-center text-gray-400 mt-16 text-sm">ไม่พบสินค้า</div>}
+            </div>
+          </div>
+        )}
+
+        {/* Mobile: Cart Tab */}
+        {mobileTab === 'cart' && (
+          <div className="flex flex-col flex-1 min-h-0">
+            <div className="flex-1 overflow-y-auto bg-white">
+              {cart.items.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
+                  <span className="text-5xl">🛒</span>
+                  <p className="text-base">ยังไม่มีสินค้าในตะกร้า</p>
+                  <button onClick={() => setMobileTab('products')} className="btn-primary !py-2 !px-6 text-sm">+ เพิ่มสินค้า</button>
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {cart.items.map((item) => (
+                    <div key={item.product_id} className="p-4 flex items-center gap-3">
+                      <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center text-xl flex-shrink-0">📦</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-gray-800 truncate">{item.name}</p>
+                        <p className="text-xs text-gray-500">{formatCurrency(item.selling_price)} / ชิ้น</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => updateQuantity(item.product_id, item.quantity - 1)}
+                          className="w-9 h-9 rounded-full bg-gray-100 active:bg-gray-200 flex items-center justify-center text-lg font-bold">−</button>
+                        <span className="w-8 text-center text-base font-bold">{item.quantity}</span>
+                        <button onClick={() => updateQuantity(item.product_id, item.quantity + 1)}
+                          className="w-9 h-9 rounded-full bg-blue-100 active:bg-blue-200 text-blue-700 flex items-center justify-center text-lg font-bold">+</button>
+                      </div>
+                      <div className="text-right ml-1">
+                        <p className="text-sm font-bold text-gray-900">{formatCurrency(item.selling_price * item.quantity)}</p>
+                        <button onClick={() => removeItem(item.product_id)} className="text-red-400 text-xs mt-1">ลบ</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Cart Summary + Pay Button (sticky bottom) */}
+            {cart.items.length > 0 && (
+              <div className="bg-white border-t border-gray-200 p-4 space-y-2">
+                <div className="flex justify-between text-sm text-gray-600"><span>ยอดรวม</span><span>{formatCurrency(subTotal)}</span></div>
+                {cart.discount > 0 && <div className="flex justify-between text-sm text-red-500"><span>ส่วนลด</span><span>-{formatCurrency(cart.discount)}</span></div>}
+                <div className="flex justify-between text-sm text-gray-600"><span>VAT 7%</span><span>{formatCurrency(tax)}</span></div>
+                <div className="flex justify-between text-xl font-bold pt-2 border-t border-gray-200">
+                  <span>รวมทั้งสิ้น</span>
+                  <span className="text-blue-600">{formatCurrency(total)}</span>
+                </div>
+                <button onClick={() => setPaymentModal(true)}
+                  className="btn-success w-full text-lg py-4 mt-1 rounded-2xl">
+                  💳 ชำระเงิน {formatCurrency(total)}
+                </button>
+                <div className="flex gap-2">
+                  <button onClick={clearCart} className="btn-danger flex-1 !py-3 text-sm">ยกเลิก</button>
+                  <button className="btn-ghost flex-1 !py-3 text-sm">พักบิล</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+      {/* ==================== Modal ชำระเงิน ==================== */}
+      {paymentModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6">
+            <h2 className="text-xl font-bold text-gray-800 mb-4">💳 ชำระเงิน</h2>
+
+            <div className="text-center mb-6">
+              <p className="text-gray-500 text-sm">ยอดที่ต้องชำระ</p>
+              <p className="text-4xl font-bold text-blue-600">{formatCurrency(total)}</p>
+            </div>
+
+            {/* วิธีชำระเงิน */}
+            <div className="grid grid-cols-3 gap-3 mb-6">
+              {[
+                { value: 'cash', label: '💵 เงินสด' },
+                { value: 'credit_card', label: '💳 บัตรเครดิต' },
+                { value: 'qr_promptpay', label: '📱 QR/PromptPay' },
+              ].map((method) => (
+                <button
+                  key={method.value}
+                  onClick={() => setPaymentMethod(method.value)}
+                  className={`p-3 rounded-xl border-2 text-sm font-medium transition-all ${
+                    paymentMethod === method.value
+                      ? 'border-blue-500 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  {method.label}
+                </button>
+              ))}
+            </div>
+
+            {/* เงินสด - รับเงิน */}
+            {paymentMethod === 'cash' && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">รับเงิน (บาท)</label>
+                <input
+                  type="number"
+                  value={cashReceived}
+                  onChange={(e) => setCashReceived(e.target.value)}
+                  className="input-field text-2xl text-center font-bold"
+                  placeholder="0.00"
+                  autoFocus
+                />
+                {cashReceived && change >= 0 && (
+                  <p className="text-center mt-2 text-lg font-bold text-green-600">
+                    เงินทอน: {formatCurrency(change)}
+                  </p>
+                )}
+                {/* ปุ่มจำนวนเงินลัด */}
+                <div className="grid grid-cols-4 gap-2 mt-3">
+                  {[20, 50, 100, 500, 1000, Math.ceil(total)].map((amt) => (
+                    <button
+                      key={amt}
+                      onClick={() => setCashReceived(String(amt))}
+                      className="btn-ghost text-sm !py-2"
+                    >
+                      {amt === Math.ceil(total) ? 'พอดี' : `฿${amt}`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+                      <div className="flex gap-3 mt-6">
+                          <button onClick={() => setPaymentModal(false)} className="btn-ghost flex-1">
+                            ยกเลิก
+                          </button>
+                          <button
+                            onClick={handlePayment}
+                            disabled={paymentMethod === 'cash' && (!cashReceived || change < 0)}
+                            className="btn-success flex-1 disabled:opacity-50"
+                          >
+                            ✅ ยืนยันชำระเงิน
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }

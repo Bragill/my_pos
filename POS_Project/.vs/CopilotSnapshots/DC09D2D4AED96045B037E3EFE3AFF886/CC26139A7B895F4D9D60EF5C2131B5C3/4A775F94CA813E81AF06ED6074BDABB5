@@ -1,0 +1,142 @@
+﻿import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import toast from 'react-hot-toast';
+
+export default function LoginPage() {
+  const [mode, setMode] = useState('password'); // 'password' | 'pin'
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
+  const [loading, setLoading] = useState(false);
+  const { login, pinLogin } = useAuth();
+  const navigate = useNavigate();
+
+  const handlePasswordLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      await login(username, password);
+      toast.success('เข้าสู่ระบบสำเร็จ');
+      navigate('/pos');
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'เข้าสู่ระบบไม่สำเร็จ');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePinLogin = async (pinValue) => {
+    if (pinValue.length < 4) return;
+    setLoading(true);
+    try {
+      await pinLogin(pinValue);
+      toast.success('เข้าสู่ระบบสำเร็จ');
+      navigate('/pos');
+    } catch (err) {
+      toast.error('PIN Code ไม่ถูกต้อง');
+      setPin('');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePinPress = (digit) => {
+    if (pin.length >= 4) return;
+    const newPin = pin + digit;
+    setPin(newPin);
+    if (newPin.length === 4) {
+      setTimeout(() => handlePinLogin(newPin), 100);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
+      style={{ background: "linear-gradient(135deg,#4f46e5 0%,#7c3aed 50%,#a855f7 100%)" }}>
+
+      {/* Background blobs */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-32 -left-32 w-96 h-96 bg-white/10 rounded-full blur-3xl" />
+        <div className="absolute -bottom-32 -right-32 w-96 h-96 bg-white/10 rounded-full blur-3xl" />
+      </div>
+
+      {/* Card */}
+      <div className="relative w-full max-w-sm bg-white/15 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/30 p-8">
+
+        {/* Logo */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-20 h-20 bg-white/20 rounded-2xl mb-4 shadow-lg border border-white/30">
+            <span className="text-4xl">🛒</span>
+          </div>
+          <h1 className="text-3xl font-bold text-white tracking-wide">POS</h1>
+          <p className="text-purple-200 text-sm mt-1">ระบบขายหน้าร้าน</p>
+        </div>
+
+        {/* Mode Toggle */}
+        <div className="flex bg-white/10 rounded-2xl p-1 mb-6 border border-white/20">
+          {[['password', '🔑 รหัสผ่าน'], ['pin', '🔢 PIN Code']].map(([val, label]) => (
+            <button key={val} onClick={() => { setMode(val); setPin(''); }}
+              className={'flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ' +
+                (mode === val ? 'bg-white text-indigo-700 shadow-lg' : 'text-white/70 hover:text-white')}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Password Mode */}
+        {mode === 'password' && (
+          <form onSubmit={handlePasswordLogin} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-purple-100 mb-1.5">ชื่อผู้ใช้</label>
+              <input type="text" value={username} onChange={(e) => setUsername(e.target.value)}
+                className="w-full bg-white/20 border border-white/30 rounded-xl px-4 py-3 text-white placeholder-purple-200 focus:outline-none focus:ring-2 focus:ring-white/50 transition-all"
+                placeholder="กรอกชื่อผู้ใช้" required autoComplete="username" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-purple-100 mb-1.5">รหัสผ่าน</label>
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-white/20 border border-white/30 rounded-xl px-4 py-3 text-white placeholder-purple-200 focus:outline-none focus:ring-2 focus:ring-white/50 transition-all"
+                placeholder="กรอกรหัสผ่าน" required autoComplete="current-password" />
+            </div>
+            <button type="submit" disabled={loading}
+              className="w-full bg-white text-indigo-700 font-bold py-3.5 rounded-2xl shadow-lg hover:bg-purple-50 active:scale-95 transition-all mt-2 disabled:opacity-60 text-base">
+              {loading ? '⏳ กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ →'}
+            </button>
+          </form>
+        )}
+
+        {/* PIN Mode */}
+        {mode === 'pin' && (
+          <div>
+            <div className="flex justify-center gap-4 mb-8">
+              {[0,1,2,3].map(i => (
+                <div key={i} className={'w-5 h-5 rounded-full border-2 transition-all duration-200 ' +
+                  (pin.length > i ? 'bg-white border-white scale-110 shadow-lg' : 'bg-white/20 border-white/40')} />
+              ))}
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {[1,2,3,4,5,6,7,8,9,null,0,'del'].map((key, idx) => (
+                <button key={idx}
+                  onClick={() => {
+                    if (key === 'del') setPin(p => p.slice(0,-1));
+                    else if (key !== null) handlePinPress(String(key));
+                  }}
+                  disabled={key === null || loading}
+                  className={
+                    'h-16 rounded-2xl text-xl font-bold transition-all active:scale-90 ' +
+                    (key === null ? 'invisible' :
+                     key === 'del'
+                       ? 'bg-white/10 text-red-300 hover:bg-red-500/30 border border-white/20'
+                       : 'bg-white/20 text-white hover:bg-white/35 border border-white/25 shadow-sm backdrop-blur-sm')
+                  }>
+                  {key === 'del' ? '⌫' : key}
+                </button>
+              ))}
+            </div>
+            {loading && <p className="text-center text-purple-200 text-sm mt-4 animate-pulse">⏳ กำลังตรวจสอบ...</p>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

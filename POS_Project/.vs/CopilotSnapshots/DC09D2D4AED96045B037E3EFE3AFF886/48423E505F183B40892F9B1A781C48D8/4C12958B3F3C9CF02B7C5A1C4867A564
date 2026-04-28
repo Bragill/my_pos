@@ -1,0 +1,690 @@
+﻿import { useState, useEffect } from 'react';
+import { formatCurrency, formatShortDate } from '../utils/format';
+import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
+import toast from 'react-hot-toast';
+
+const GRAD = 'linear-gradient(to left,#3300FC,#95008A,#EB0000)';
+const PAY_LABEL = { cash: '💵 เงินสด', credit_card: '💳 บัตรเครดิต', qr_promptpay: '📱 QR/PromptPay', outstanding: '📋 ค้างชำระ' };
+const getPayLabel = (method, order) => {
+  const wasOutstanding = order?.debtor_id || order?.debtor_name;
+  const base = PAY_LABEL[method] || method;
+  if (method === 'outstanding') return base;
+  if (wasOutstanding) return `${base} (ค้างชำระ)`;
+  return base;
+};
+
+export default function DashboardPage() {
+  const { user } = useAuth();
+  const canManage = user?.role === 'admin' || user?.role === 'manager';
+
+  const [dashboard, setDashboard] = useState(null);
+  const [dailySales, setDailySales] = useState([]);
+  const [topProducts, setTopProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [dayOrders, setDayOrders] = useState([]);
+  const [dayLoading, setDayLoading] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [orderDetail, setOrderDetail] = useState(null);
+  const [orderLoading, setOrderLoading] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editForm, setEditForm] = useState({ discount: 0, payment_method: 'cash', remark: '' });
+  const [saving, setSaving] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+
+  useEffect(() => { loadDashboard(); }, []);
+
+  const loadDashboard = async () => {
+    try {
+      const [dashRes, salesRes, topRes] = await Promise.all([
+        api.get('/reports/dashboard'),
+        api.get('/reports/daily-sales', { params: { days: 7 } }),
+        api.get('/reports/top-products', { params: { limit: 5 } }),
+      ]);
+      setDashboard(dashRes.data.data);
+      setDailySales(salesRes.data.data);
+      setTopProducts(topRes.data.data);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  };
+
+  const handleDayClick = async (day) => {
+    setSelectedDate(day);
+    setSelectedOrder(null);
+    setOrderDetail(null);
+    setDayLoading(true);
+    try {
+      const res = await api.get('/orders', {
+        params: { date_from: day.date + ' 00:00:00', date_to: day.date + ' 23:59:59', status: 'completed', limit: 100 },
+      });
+      setDayOrders(res.data.data);
+    } catch { setDayOrders([]); }
+    finally { setDayLoading(false); }
+  };
+
+  const handleOrderClick = async (order) => {
+    setSelectedOrder(order);
+    setEditMode(false);
+    setDeleteConfirm(false);
+    setOrderLoading(true);
+    try {
+      const res = await api.get('/orders/' + order.id);
+      setOrderDetail(res.data.data);
+      setEditForm({ discount: res.data.data.discount, payment_method: res.data.data.payment_method, remark: res.data.data.remark || '' });
+    } catch { setOrderDetail(null); }
+    finally { setOrderLoading(false); }
+  };
+
+  const handleSaveEdit = async () => {
+    setSaving(true);
+    try {
+      const res = await api.put('/orders/' + selectedOrder.id, editForm);
+      setOrderDetail(res.data.data);
+      setEditMode(false);
+      toast.success('แก้ไขรายการสำเร็จ');
+      loadDashboard();
+      if (selectedDate) handleDayClick(selectedDate);
+    } catch (err) { toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาด'); }
+    finally { setSaving(false); }
+  };
+
+  const handleDelete = async () => {
+    setSaving(true);
+    try {
+      await api.delete('/orders/' + selectedOrder.id);
+      toast.success('ลบรายการสำเร็จ');
+      setSelectedOrder(null);
+      setOrderDetail(null);
+      setDeleteConfirm(false);
+      loadDashboard();
+      if (selectedDate) handleDayClick(selectedDate);
+    } catch (err) { toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาด'); }
+    finally { setSaving(false); }
+  };
+
+  const [lowStockModal, setLowStockModal] = useState(false);
+  const [lowStockItems, setLowStockItems] = useState([]);
+
+  const openLowStock = async () => {
+    setLowStockModal(true);
+    try {
+      const res = await api.get('/inventory', { params: { low_stock: true } });
+      setLowStockItems(res.data.data);
+    } catch { setLowStockItems([]); }
+  };
+
+  const [monthModal, setMonthModal] = useState(false);
+  const [monthData, setMonthData] = useState(null);
+  const [monthDataLoading, setMonthDataLoading] = useState(false);
+  const [monthPage, setMonthPage] = useState(1);
+  const MONTH_PAGE_SIZE = 6;
+
+  const openMonthModal = async () => {
+    setMonthModal(true);
+    setMonthDataLoading(true);
+    try {
+      const now = new Date();
+      const dateFrom = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01 00:00:00`;
+      const dateTo   = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-31 23:59:59`;
+      const res = await api.get('/orders', { params: { date_from: dateFrom, date_to: dateTo, limit: 500 } });
+      setMonthData(res.data.data);
+    } catch { setMonthData(null); }
+    finally { setMonthDataLoading(false); }
+  };
+
+  const closeOrder = () => { setSelectedOrder(null); setOrderDetail(null); setEditMode(false); setDeleteConfirm(false); };
+
+  if (loading) return <div className="flex items-center justify-center h-64 text-gray-400">⏳ กำลังโหลด...</div>;
+
+  /* ────────────────────────────────── */
+  /*  Profit/Cost sub-component         */
+  /* ────────────────────────────────── */
+  function ProfitSection() {
+    const THAI_MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    const now = new Date();
+    const thisYear = now.getFullYear();
+
+    // Build month options (last 12 months) + year options (current year + prev year)
+    const monthOptions = [];
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(thisYear, now.getMonth() - i, 1);
+      const value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      const label = `${THAI_MONTHS[d.getMonth()]} ${d.getFullYear()+543}`;
+      monthOptions.push({ value, label });
+    }
+    const yearOptions = [thisYear, thisYear - 1].map(y => ({ value: String(y), label: `ปี ${y+543}` }));
+
+    const [mode, setMode] = useState('month'); // 'month' | 'year'
+    const [selMonth, setSelMonth] = useState(monthOptions[0].value);
+    const [selYear, setSelYear] = useState(String(thisYear));
+    const [detail, setDetail] = useState(null);
+    const [yearData, setYearData] = useState(null);
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+      if (mode === 'month') loadMonth(selMonth);
+      else loadYear(selYear);
+    }, [mode, selMonth, selYear]);
+
+    const loadMonth = async (month) => {
+      setBusy(true); setDetail(null);
+      try { const r = await api.get('/reports/month-detail', { params: { month } }); setDetail(r.data.data); }
+      catch {}
+      finally { setBusy(false); }
+    };
+
+    const loadYear = async (year) => {
+      setBusy(true); setYearData(null);
+      try { const r = await api.get('/reports/year-detail', { params: { year } }); setYearData(r.data.data); }
+      catch {}
+      finally { setBusy(false); }
+    };
+
+    const StatCard = ({ title, value, icon, color }) => (
+      <div className="rounded-2xl px-4 py-3 relative overflow-hidden" style={{ background: `${color}12` }}>
+        <p className="text-xs text-gray-500">{title}</p>
+        <p className="text-lg font-bold mt-0.5" style={{ color }}>{value}</p>
+        <span className="absolute top-2 right-3 text-xl opacity-20">{icon}</span>
+      </div>
+    );
+
+    const renderRows = (rows, totals) => (
+      <>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <StatCard title="รายได้รวม"  value={formatCurrency(totals.revenue)} icon="💰" color="#3300FC" />
+          <StatCard title="ต้นทุนรวม" value={formatCurrency(totals.cost)}    icon="📦" color="#95008A" />
+          <StatCard title={totals.profit >= 0 ? 'กำไรสุทธิ' : 'ขาดทุน'}
+            value={formatCurrency(Math.abs(totals.profit))} icon={totals.profit >= 0 ? '📈' : '📉'}
+            color={totals.profit >= 0 ? '#16a34a' : '#EB0000'} />
+          <StatCard title="จำนวนบิล"  value={`${totals.total_orders} บิล`} icon="🧾" color="#6b7280" />
+        </div>
+
+        {rows.length === 0
+          ? <p className="text-center text-gray-400 py-6 text-sm">ไม่มีข้อมูลในช่วงนี้</p>
+          : <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
+                    <th className="pb-2 pr-3 font-medium">วันที่ / เดือน</th>
+                    <th className="pb-2 pr-3 text-right font-medium">บิล</th>
+                    <th className="pb-2 pr-3 text-right font-medium">รายได้</th>
+                    <th className="pb-2 pr-3 text-right font-medium">ต้นทุน</th>
+                    <th className="pb-2 text-right font-medium">กำไร/ขาดทุน</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, i) => {
+                    const pct = row.revenue > 0 ? ((row.profit / row.revenue)*100).toFixed(1) : 0;
+                    const isProfit = row.profit >= 0;
+                    return (
+                      <tr key={i} className="border-b border-gray-50 hover:bg-purple-50 transition-colors">
+                        <td className="py-2.5 pr-3 text-gray-600 text-xs">{row.label || formatShortDate(row.date || row.month)}</td>
+                        <td className="py-2.5 pr-3 text-right text-gray-500">{row.total_orders}</td>
+                        <td className="py-2.5 pr-3 text-right font-medium text-gray-800">{formatCurrency(row.revenue)}</td>
+                        <td className="py-2.5 pr-3 text-right" style={{ color:'#95008A' }}>{formatCurrency(row.cost)}</td>
+                        <td className="py-2.5 text-right">
+                          <span className="font-bold" style={{ color: isProfit ? '#16a34a' : '#EB0000' }}>
+                            {isProfit ? '' : '-'}{formatCurrency(Math.abs(row.profit))}
+                          </span>
+                          <span className="text-xs text-gray-400 ml-1">({pct}%)</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-gray-200 font-bold">
+                    <td className="pt-2.5 pr-3 text-gray-700">รวม</td>
+                    <td className="pt-2.5 pr-3 text-right text-gray-600">{totals.total_orders}</td>
+                    <td className="pt-2.5 pr-3 text-right text-gray-800">{formatCurrency(totals.revenue)}</td>
+                    <td className="pt-2.5 pr-3 text-right" style={{ color:'#95008A' }}>{formatCurrency(totals.cost)}</td>
+                    <td className="pt-2.5 text-right" style={{ color: totals.profit >= 0 ? '#16a34a' : '#EB0000' }}>
+                      {formatCurrency(totals.profit)}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+        }
+      </>
+    );
+
+    return (
+      <div className="mt-5 card">
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <h3 className="font-bold text-gray-700">💹 ต้นทุน / กำไร / ขาดทุน</h3>
+          <div className="flex items-center gap-2">
+            {/* Mode toggle */}
+            <div className="flex bg-gray-100 rounded-xl p-0.5 text-xs font-semibold">
+              {[['month','รายเดือน'],['year','รายปี']].map(([v,l]) => (
+                <button key={v} onClick={() => setMode(v)}
+                  className={'px-3 py-1.5 rounded-lg transition-all ' + (mode===v ? 'bg-white text-purple-700 shadow' : 'text-gray-500 hover:text-gray-700')}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {/* Dropdown */}
+            {mode === 'month'
+              ? <select value={selMonth} onChange={e => setSelMonth(e.target.value)}
+                  className="input-field !w-auto !py-1.5 !px-3 text-sm cursor-pointer">
+                  {monthOptions.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+              : <select value={selYear} onChange={e => setSelYear(e.target.value)}
+                  className="input-field !w-auto !py-1.5 !px-3 text-sm cursor-pointer">
+                  {yearOptions.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+                </select>
+            }
+          </div>
+        </div>
+
+        {busy ? <p className="text-center text-gray-400 py-8">⏳ กำลังโหลด...</p> : (
+          <>
+            {mode === 'month' && detail && renderRows(detail.rows, detail.totals)}
+            {mode === 'year'  && yearData && renderRows(yearData.rows, yearData.totals)}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)]">
+      <h1 className="text-2xl font-bold text-gray-800 mb-5">📊 แดชบอร์ด</h1>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        {[
+          { title: 'ยอดขายวันนี้',   value: formatCurrency(dashboard?.today_sales || 0), icon: '💰' },
+          { title: 'บิลวันนี้',       value: dashboard?.today_orders || 0,                icon: '🧾' },
+          { title: 'ยอดขายเดือนนี้', value: formatCurrency(dashboard?.month_sales || 0), sub: `${dashboard?.month_orders || 0} บิล`, icon: '📈', onClick: openMonthModal },
+          { title: 'สินค้าใกล้หมด',  value: dashboard?.low_stock_count || 0,             icon: '⚠️', onClick: openLowStock },
+        ].map((c) => (
+          <div key={c.title}
+            className={"card relative overflow-hidden " + (c.onClick ? "cursor-pointer hover:shadow-md active:scale-[0.98] transition-all" : "")}
+            onClick={c.onClick}>
+            <p className="text-xs text-gray-500 font-medium">{c.title}</p>
+            <p className="text-2xl font-bold mt-1 text-gray-800">{c.value}</p>
+            {c.sub && <p className="text-xs text-gray-400 mt-0.5">{c.sub}</p>}
+            {c.onClick && <p className="text-xs mt-1" style={{color:'#95008A'}}>คลิกเพื่อดูรายละเอียด</p>}
+            <span className="absolute top-3 right-4 text-2xl opacity-20">{c.icon}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* ── ต้นทุน / กำไร / ขาดทุน ── */}
+      <ProfitSection />
+
+      <div className="grid md:grid-cols-2 gap-5 mt-5">
+        {/* ยอดขายรายวัน */}
+        <div className="card">
+          <h3 className="font-bold text-gray-700 mb-3">
+            📈 ยอดขาย 7 วันล่าสุด
+            <span className="text-xs text-gray-400 font-normal ml-2">คลิกเพื่อดูรายละเอียด</span>
+          </h3>
+          <div className="space-y-1">
+            {dailySales.map((day) => {
+              const active = selectedDate?.date === day.date;
+              return (
+                <button key={day.date} onClick={() => handleDayClick(day)}
+                  className="w-full flex justify-between items-center px-3 py-2.5 rounded-xl transition-all text-left"
+                  style={active ? { backgroundImage: GRAD } : { background: 'transparent' }}>
+                  <span className="text-sm" style={{ color: active ? '#fff' : '#4b5563' }}>
+                    {formatShortDate(day.date)}
+                  </span>
+                  <div className="text-right">
+                    <span className="text-sm font-bold" style={{ color: active ? '#fff' : '#1f2937' }}>
+                      {formatCurrency(day.total_sales)}
+                    </span>
+                    <span className="text-xs ml-2" style={{ color: active ? 'rgba(255,255,255,0.7)' : '#9ca3af' }}>
+                      ({day.total_orders} บิล)
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+            {dailySales.length === 0 && <p className="text-gray-400 text-sm text-center py-6">ยังไม่มีข้อมูล</p>}
+          </div>
+        </div>
+
+        {/* สินค้าขายดี */}
+        <div className="card">
+          <h3 className="font-bold text-gray-700 mb-3">🏆 สินค้าขายดี Top 5</h3>
+          <div className="space-y-1">
+            {topProducts.map((product, idx) => (
+              <div key={product.id} className="flex justify-between items-center px-3 py-2.5 rounded-xl hover:bg-purple-50">
+                <div className="flex items-center gap-3">
+                  <span className="w-7 h-7 text-white rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                    style={{ backgroundImage: GRAD }}>{idx + 1}</span>
+                  <span className="text-sm font-medium text-gray-800">{product.name}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-sm font-bold text-gray-800">{product.total_quantity} ชิ้น</span>
+                  <p className="text-xs text-gray-400">{formatCurrency(product.total_revenue)}</p>
+                </div>
+              </div>
+            ))}
+            {topProducts.length === 0 && <p className="text-gray-400 text-sm text-center py-6">ยังไม่มีข้อมูล</p>}
+          </div>
+        </div>
+      </div>
+
+      {/* Day Orders Panel */}
+      {selectedDate && (
+        <div className="mt-5 card">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-gray-700">
+              🧾 รายการบิล — {formatShortDate(selectedDate.date)}
+              <span className="ml-2 text-sm font-normal text-gray-400">
+                ({selectedDate.total_orders} บิล / {formatCurrency(selectedDate.total_sales)})
+              </span>
+            </h3>
+            <button onClick={() => { setSelectedDate(null); setSelectedOrder(null); setOrderDetail(null); }}
+              className="text-gray-400 hover:text-gray-600 text-xl leading-none">✕</button>
+          </div>
+          {dayLoading ? <p className="text-center text-gray-400 py-8">⏳ กำลังโหลด...</p> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
+                    <th className="pb-2 pr-4 font-medium">เลขบิล</th>
+                    <th className="pb-2 pr-4 font-medium">เวลา</th>
+                    <th className="pb-2 pr-4 font-medium">แคชเชียร์</th>
+                    <th className="pb-2 pr-4 font-medium">ชำระ</th>
+                    <th className="pb-2 text-right font-medium">ยอด</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dayOrders.map((order) => (
+                    <tr key={order.id} onClick={() => handleOrderClick(order)}
+                      className="cursor-pointer border-b border-gray-50 hover:bg-purple-50 transition-colors"
+                      style={selectedOrder?.id === order.id ? { background: 'rgba(147,51,234,0.08)' } : {}}>
+                      <td className="py-2.5 pr-4 font-mono text-xs font-semibold" style={{ color: '#95008A' }}>{order.order_no}</td>
+                      <td className="py-2.5 pr-4 text-gray-500">{order.created_at?.slice(11, 16)}</td>
+                      <td className="py-2.5 pr-4 text-gray-600">{order.cashier_name || '-'}</td>
+                      <td className="py-2.5 pr-4 text-gray-500 text-xs">{getPayLabel(order.payment_method, order)}</td>
+                      <td className="py-2.5 text-right font-bold text-gray-800">{formatCurrency(order.total_amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {dayOrders.length === 0 && <p className="text-center text-gray-400 py-6 text-sm">ไม่พบรายการ</p>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Order Detail Modal */}
+      {selectedOrder && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-gray-800 text-lg">{selectedOrder.order_no}</h3>
+                <p className="text-xs text-gray-400">{selectedOrder.created_at?.slice(0, 16)}</p>
+              </div>
+              <button onClick={closeOrder}
+                className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 text-sm">✕</button>
+            </div>
+
+            {orderLoading ? <p className="text-center text-gray-400 py-8">⏳ กำลังโหลด...</p> : orderDetail ? (
+              <>
+                {/* Info / Edit */}
+                {editMode ? (
+                  <div className="space-y-3 mb-4">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">ส่วนลด (บาท)</label>
+                      <input type="number" min="0" value={editForm.discount}
+                        onChange={e => setEditForm({ ...editForm, discount: parseFloat(e.target.value) || 0 })}
+                        className="input-field" />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">วิธีชำระเงิน</label>
+                      <select value={editForm.payment_method}
+                        onChange={e => setEditForm({ ...editForm, payment_method: e.target.value })}
+                        className="input-field">
+                        <option value="cash">💵 เงินสด</option>
+                        <option value="credit_card">💳 บัตรเครดิต</option>
+                        <option value="qr_promptpay">📱 QR/PromptPay</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">หมายเหตุ</label>
+                      <input type="text" value={editForm.remark}
+                        onChange={e => setEditForm({ ...editForm, remark: e.target.value })}
+                        className="input-field" placeholder="หมายเหตุ..." />
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={() => setEditMode(false)} className="btn-ghost flex-1 !py-2 text-sm">ยกเลิก</button>
+                      <button onClick={handleSaveEdit} disabled={saving}
+                        className="btn-primary flex-1 !py-2 text-sm disabled:opacity-50">
+                        {saving ? 'กำลังบันทึก...' : '💾 บันทึก'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                    <div className="bg-gray-50 rounded-xl px-3 py-2">
+                      <p className="text-xs text-gray-400">แคชเชียร์</p>
+                      <p className="text-sm font-semibold text-gray-700">{orderDetail.cashier_name || '-'}</p>
+                    </div>
+                    <div className="bg-gray-50 rounded-xl px-3 py-2">
+                      <p className="text-xs text-gray-400">วิธีชำระ</p>
+                      <p className="text-sm font-semibold text-gray-700">{getPayLabel(orderDetail.payment_method, orderDetail)}</p>
+                    </div>
+                    {orderDetail.remark && (
+                      <div className="bg-gray-50 rounded-xl px-3 py-2 col-span-2">
+                        <p className="text-xs text-gray-400">หมายเหตุ</p>
+                        <p className="text-sm text-gray-700">{orderDetail.remark}</p>
+                      </div>
+                    )}
+                    {orderDetail.customer_name && (
+                      <div className="bg-gray-50 rounded-xl px-3 py-2 col-span-2">
+                        <p className="text-xs text-gray-400">ลูกค้า</p>
+                        <p className="text-sm font-semibold text-gray-700">{orderDetail.customer_name}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Items */}
+                {!editMode && (
+                  <>
+                    <div className="border border-gray-100 rounded-2xl overflow-hidden mb-4">
+                      <div className="px-4 py-2 text-xs text-gray-400 font-medium grid grid-cols-12 bg-gray-50">
+                        <span className="col-span-6">สินค้า</span>
+                        <span className="col-span-2 text-center">จำนวน</span>
+                        <span className="col-span-2 text-right">ราคา</span>
+                        <span className="col-span-2 text-right">รวม</span>
+                      </div>
+                      {orderDetail.items?.map((item) => (
+                        <div key={item.id} className="px-4 py-2.5 grid grid-cols-12 text-sm border-t border-gray-50">
+                          <div className="col-span-6">
+                            <p className="font-medium text-gray-800 text-xs leading-tight">{item.product_name}</p>
+                            <p className="text-xs text-gray-400">{item.sku}</p>
+                          </div>
+                          <span className="col-span-2 text-center text-gray-600">{item.quantity}</span>
+                          <span className="col-span-2 text-right text-gray-600 text-xs">{formatCurrency(item.unit_price)}</span>
+                          <span className="col-span-2 text-right font-semibold text-gray-800 text-xs">{formatCurrency(item.total_price)}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="space-y-1.5 text-sm mb-4">
+                      <div className="flex justify-between text-gray-500"><span>ยอดรวม</span><span>{formatCurrency(orderDetail.sub_total)}</span></div>
+                      {orderDetail.discount > 0 && <div className="flex justify-between text-red-500"><span>ส่วนลด</span><span>-{formatCurrency(orderDetail.discount)}</span></div>}
+                      <div className="flex justify-between text-gray-500"><span>VAT</span><span>{formatCurrency(orderDetail.tax)}</span></div>
+                      <div className="flex justify-between text-base font-bold pt-2 border-t border-gray-100">
+                        <span className="text-gray-800">รวมทั้งสิ้น</span>
+                        <span style={{ color: '#95008A' }}>{formatCurrency(orderDetail.total_amount)}</span>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Admin/Manager Actions */}
+                {canManage && !editMode && (
+                  deleteConfirm ? (
+                    <div className="bg-red-50 border border-red-100 rounded-2xl p-4 text-center">
+                      <p className="text-sm font-semibold text-red-700 mb-3">⚠️ ยืนยันการลบรายการนี้?</p>
+                      <p className="text-xs text-red-500 mb-3">สต๊อกสินค้าจะถูกคืนกลับโดยอัตโนมัติ</p>
+                      <div className="flex gap-2">
+                        <button onClick={() => setDeleteConfirm(false)} className="btn-ghost flex-1 !py-2 text-sm">ยกเลิก</button>
+                        <button onClick={handleDelete} disabled={saving}
+                          className="btn-danger flex-1 !py-2 text-sm disabled:opacity-50">
+                          {saving ? 'กำลังลบ...' : '🗑️ ยืนยันลบ'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 pt-1 border-t border-gray-100">
+                      <button onClick={() => setEditMode(true)}
+                        className="flex-1 flex items-center justify-center gap-1 py-2.5 rounded-xl text-sm font-medium border border-purple-200 text-purple-700 hover:bg-purple-50 transition-all">
+                        ✏️ แก้ไข
+                      </button>
+                      <button onClick={() => setDeleteConfirm(true)}
+                        className="flex-1 flex items-center justify-center gap-1 py-2.5 rounded-xl text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 transition-all">
+                        🗑️ ลบรายการ
+                      </button>
+                    </div>
+                  )
+                )}
+              </>
+            ) : <p className="text-center text-gray-400 py-8">ไม่พบข้อมูล</p>}
+          </div>
+        </div>
+      )}
+
+      {/* Month Sales Modal */}
+      {monthModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h3 className="text-lg font-bold text-gray-800">📈 ยอดขายเดือนนี้</h3>
+                {monthData && (
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {monthData.length} บิล · รายได้ {formatCurrency(monthData.reduce((s,o) => s + o.total_amount, 0))}
+                  </p>
+                )}
+              </div>
+              <button onClick={() => setMonthModal(false)}
+                className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-all">✕</button>
+            </div>
+
+            {/* Content */}
+            <div className="overflow-y-auto flex-1 px-6 py-4">
+              {monthDataLoading ? (
+                <p className="text-center text-gray-400 py-12">⏳ กำลังโหลด...</p>
+              ) : !monthData || monthData.length === 0 ? (
+                <p className="text-center text-gray-400 py-12">ยังไม่มีคำสั่งซื้อในเดือนนี้</p>
+              ) : (
+                <>
+                  {/* Summary row */}
+                  <div className="grid grid-cols-3 gap-3 mb-5">
+                    {[
+                      { label: 'รายได้รวม',   value: formatCurrency(monthData.reduce((s,o) => s + o.total_amount, 0)), color: '#3300FC' },
+                      { label: 'จำนวนบิล',   value: `${monthData.length} บิล`, color: '#95008A' },
+                      { label: 'เฉลี่ย/บิล',  value: formatCurrency(monthData.reduce((s,o) => s + o.total_amount, 0) / monthData.length), color: '#EB0000' },
+                    ].map(c => (
+                      <div key={c.label} className="rounded-2xl bg-gray-50 px-3 py-3 text-center">
+                        <p className="text-xs text-gray-400 mb-1">{c.label}</p>
+                        <p className="font-bold text-sm" style={{ color: c.color }}>{c.value}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Order list */}
+                  <div className="space-y-2">
+                    {monthData.map(order => (
+                      <div key={order.id} className="rounded-2xl border border-gray-100 hover:bg-purple-50 px-4 py-3 transition-colors">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-mono font-semibold" style={{ color:'#95008A' }}>{order.order_no}</span>
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                order.status === 'completed' ? 'bg-green-100 text-green-700' :
+                                order.status === 'outstanding' ? 'bg-amber-100 text-amber-700' :
+                                'bg-gray-100 text-gray-500'}`}>
+                                {order.status === 'completed' ? 'ชำระแล้ว' : order.status === 'outstanding' ? 'ค้างชำระ' : order.status}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {order.created_at?.slice(0,16)} · {order.cashier_name}
+                              {order.debtor_name && ` · ${order.debtor_name}`}
+                            </p>
+                          </div>
+                          <p className="font-bold text-gray-800">{formatCurrency(order.total_amount)}</p>
+                        </div>
+                        {order.payment_method && (
+                          <p className="text-xs text-gray-400 mt-1">{getPayLabel(order.payment_method, order)}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Low Stock Modal */}
+      {lowStockModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h3 className="text-lg font-bold text-gray-800">⚠️ สินค้าใกล้หมด</h3>
+                <p className="text-xs text-gray-400 mt-0.5">{lowStockItems.length} รายการที่ต้องสั่งซื้อ</p>
+              </div>
+              <button onClick={() => setLowStockModal(false)}
+                className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-all">✕</button>
+            </div>
+
+            {/* List */}
+            <div className="overflow-y-auto flex-1 px-6 py-4">
+              {lowStockItems.length === 0 ? (
+                <div className="text-center py-12">
+                  <p className="text-3xl mb-2">✅</p>
+                  <p className="text-gray-500 font-medium">ไม่มีสินค้าใกล้หมด</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {lowStockItems.map(item => {
+                    const pct = item.reorder_level > 0 ? Math.min((item.quantity / item.reorder_level) * 100, 100) : 0;
+                    const danger = item.quantity === 0;
+                    return (
+                      <div key={item.id} className={"rounded-2xl px-4 py-3 border " + (danger ? "bg-red-50 border-red-100" : "bg-amber-50 border-amber-100")}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div>
+                            <p className="font-semibold text-gray-800 text-sm">{item.name}</p>
+                            <p className="text-xs text-gray-400">{item.sku} · {item.category_name}</p>
+                          </div>
+                          <div className="text-right flex-shrink-0 ml-3">
+                            <p className={"text-xl font-bold " + (danger ? "text-red-600" : "text-amber-600")}>{item.quantity}</p>
+                            <p className="text-xs text-gray-400">จุดสั่งซื้อ: {item.reorder_level}</p>
+                          </div>
+                        </div>
+                        {/* Stock bar */}
+                        <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <div className={"h-full rounded-full transition-all " + (danger ? "bg-red-500" : "bg-amber-400")}
+                            style={{ width: `${pct}%` }} />
+                        </div>
+                        {danger && <p className="text-xs text-red-600 font-semibold mt-1">🚨 หมดสต๊อก!</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

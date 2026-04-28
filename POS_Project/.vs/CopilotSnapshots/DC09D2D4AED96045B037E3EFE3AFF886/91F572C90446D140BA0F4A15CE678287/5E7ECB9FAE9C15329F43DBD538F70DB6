@@ -1,0 +1,229 @@
+﻿const express = require("express");
+const db = require("../database/dbHelper");
+const { authenticate, authorize } = require("../middleware/auth");
+const { AppError } = require("../middleware/errorHandler");
+const router = express.Router();
+
+// Sales = actual payments received (covers completed + partial outstanding)
+router.get("/daily-sales", authenticate, authorize("admin", "manager"), (req, res, next) => {
+  try {
+    const { days = 30 } = req.query;
+    const rows = db.all(`
+      SELECT DATE(p.created_at) as date,
+             COUNT(DISTINCT o.id) as total_orders,
+             COALESCE(SUM(p.amount), 0) as total_sales,
+             COALESCE(SUM(o.discount), 0) as total_discount,
+             COALESCE(SUM(o.tax), 0) as total_tax
+      FROM payments p
+      JOIN orders o ON p.order_id = o.id
+      WHERE p.created_at >= datetime('now', '-' || ? || ' days')
+        AND o.status != 'refunded'
+      GROUP BY DATE(p.created_at)
+      ORDER BY date DESC
+    `, [parseInt(days)]);
+    res.json({ success: true, data: rows });
+  } catch (err) { next(err); }
+});
+
+router.get("/top-products", authenticate, authorize("admin", "manager"), (req, res, next) => {
+  try {
+    const { limit = 10, days = 30 } = req.query;
+    const rows = db.all(`
+      SELECT p.id, p.name, p.sku,
+             SUM(oi.quantity) as total_quantity,
+             SUM(oi.total_price) as total_revenue
+      FROM order_items oi
+      JOIN products p ON oi.product_id = p.id
+      JOIN orders o ON oi.order_id = o.id
+      WHERE o.status != 'refunded'
+        AND EXISTS (SELECT 1 FROM payments pay WHERE pay.order_id = o.id AND pay.created_at >= datetime('now', '-' || ? || ' days'))
+      GROUP BY p.id, p.name, p.sku
+      ORDER BY total_quantity DESC LIMIT ?
+    `, [parseInt(days), parseInt(limit)]);
+    res.json({ success: true, data: rows });
+  } catch (err) { next(err); }
+});
+
+router.get("/cashier-performance", authenticate, authorize("admin", "manager"), (req, res, next) => {
+  try {
+    const { days = 30 } = req.query;
+    const rows = db.all(`
+      SELECT u.id, u.full_name,
+             COUNT(DISTINCT o.id) as total_orders,
+             COALESCE(SUM(p.amount), 0) as total_sales,
+             AVG(p.amount) as avg_order_value
+      FROM payments p
+      JOIN orders o ON p.order_id = o.id
+      JOIN users u ON o.user_id = u.id
+      WHERE p.created_at >= datetime('now', '-' || ? || ' days')
+        AND o.status != 'refunded'
+      GROUP BY u.id, u.full_name
+      ORDER BY total_sales DESC
+    `, [parseInt(days)]);
+    res.json({ success: true, data: rows });
+  } catch (err) { next(err); }
+});
+
+router.get("/stock-value", authenticate, authorize("admin", "manager"), (req, res, next) => {
+  try {
+    const rows = db.all("SELECT p.id, p.name, p.sku, p.cost_price, p.selling_price, i.quantity, (p.cost_price * i.quantity) as stock_cost_value, (p.selling_price * i.quantity) as stock_retail_value FROM inventory i JOIN products p ON i.product_id = p.id WHERE p.is_active = 1 AND i.quantity > 0 ORDER BY stock_cost_value DESC");
+    const totalCost = rows.reduce((sum, r) => sum + r.stock_cost_value, 0);
+    const totalRetail = rows.reduce((sum, r) => sum + r.stock_retail_value, 0);
+    res.json({ success: true, data: { items: rows, summary: { total_cost_value: totalCost, total_retail_value: totalRetail } } });
+  } catch (err) { next(err); }
+});
+
+router.get("/dashboard", authenticate, (req, res, next) => {
+  try {
+    // today_sales = sum of all payments made today (regardless of order status)
+    const today = db.get(`
+      SELECT COUNT(DISTINCT o.id) as orders,
+             COALESCE(SUM(p.amount), 0) as sales
+      FROM payments p
+      JOIN orders o ON p.order_id = o.id
+      WHERE DATE(p.created_at) = DATE('now')
+        AND o.status != 'refunded'
+    `);
+    const monthSales = db.get(`
+      SELECT COALESCE(SUM(p.amount), 0) as sales, COUNT(DISTINCT o.id) as orders
+      FROM payments p
+      JOIN orders o ON p.order_id = o.id
+      WHERE strftime('%Y-%m', p.created_at) = strftime('%Y-%m', 'now')
+        AND o.status != 'refunded'
+    `);
+    const lowStock = db.get("SELECT COUNT(*) as count FROM inventory i JOIN products p ON i.product_id = p.id WHERE i.quantity <= i.reorder_level AND p.is_active = 1");
+    res.json({ success: true, data: {
+      today_orders: today?.orders || 0,
+      today_sales:  today?.sales  || 0,
+      month_sales:  monthSales?.sales || 0,
+      low_stock_count: lowStock?.count || 0,
+    }});
+  } catch (err) { next(err); }
+});
+
+// Monthly summary: revenue, cost, profit for last 12 months
+router.get("/monthly-summary", authenticate, authorize("admin", "manager"), (req, res, next) => {
+  try {
+    const rows = db.all(`
+      SELECT
+        strftime('%Y-%m', p.created_at) as month,
+        COALESCE(SUM(p.amount), 0) as revenue,
+        COALESCE(SUM(oi.quantity * prod.cost_price), 0) as cost,
+        COALESCE(SUM(p.amount), 0) - COALESCE(SUM(oi.quantity * prod.cost_price), 0) as profit,
+        COUNT(DISTINCT o.id) as total_orders
+      FROM payments p
+      JOIN orders o ON p.order_id = o.id
+      JOIN order_items oi ON oi.order_id = o.id
+      JOIN products prod ON prod.id = oi.product_id
+      WHERE o.status != 'refunded'
+        AND p.created_at >= datetime('now', '-12 months')
+      GROUP BY strftime('%Y-%m', p.created_at)
+      ORDER BY month DESC
+    `);
+    res.json({ success: true, data: rows });
+  } catch (err) { next(err); }
+});
+
+// Single month detail: daily breakdown — cost = stock received that day × cost_price
+router.get("/month-detail", authenticate, authorize("admin", "manager"), (req, res, next) => {
+  try {
+    const { month } = req.query;
+    if (!month) return next(new AppError("กรุณาระบุเดือน", 400));
+
+    // Revenue: actual payments in the month
+    const revenueRows = db.all(`
+      SELECT DATE(p.created_at) as date,
+             COALESCE(SUM(p.amount), 0) as revenue,
+             COUNT(DISTINCT o.id) as total_orders
+      FROM payments p
+      JOIN orders o ON p.order_id = o.id
+      WHERE o.status != 'refunded' AND strftime('%Y-%m', p.created_at) = ?
+      GROUP BY DATE(p.created_at)
+    `, [month]);
+
+    // Cost: stock received (receive + positive adjust) × cost_price in the month
+    const costRows = db.all(`
+      SELECT DATE(st.created_at) as date,
+             COALESCE(SUM(st.quantity * p.cost_price), 0) as cost
+      FROM stock_transactions st
+      JOIN products p ON p.id = st.product_id
+      WHERE st.quantity > 0
+        AND st.type IN ('receive', 'adjust')
+        AND strftime('%Y-%m', st.created_at) = ?
+      GROUP BY DATE(st.created_at)
+    `, [month]);
+
+    // Merge by date
+    const costMap = {};
+    costRows.forEach(r => { costMap[r.date] = r.cost; });
+    const allDates = [...new Set([...revenueRows.map(r=>r.date), ...Object.keys(costMap)])].sort();
+    const rows = allDates.map(date => {
+      const rev = revenueRows.find(r => r.date === date) || { revenue: 0, total_orders: 0 };
+      const cost = costMap[date] || 0;
+      return { date, revenue: rev.revenue, cost, profit: rev.revenue - cost, total_orders: rev.total_orders };
+    });
+
+    const totals = {
+      revenue:      rows.reduce((s,r) => s+r.revenue, 0),
+      cost:         rows.reduce((s,r) => s+r.cost, 0),
+      profit:       rows.reduce((s,r) => s+r.profit, 0),
+      total_orders: rows.reduce((s,r) => s+r.total_orders, 0),
+    };
+    res.json({ success: true, data: { rows, totals, month } });
+  } catch (err) { next(err); }
+});
+
+// Year detail: monthly breakdown — cost = stock received that month × cost_price
+router.get("/year-detail", authenticate, authorize("admin", "manager"), (req, res, next) => {
+  try {
+    const { year } = req.query;
+    if (!year) return next(new AppError("กรุณาระบุปี", 400));
+    const THAI_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+
+    const revenueRows = db.all(`
+      SELECT strftime('%Y-%m', p.created_at) as month,
+             COALESCE(SUM(p.amount), 0) as revenue,
+             COUNT(DISTINCT o.id) as total_orders
+      FROM payments p
+      JOIN orders o ON p.order_id = o.id
+      WHERE o.status != 'refunded' AND strftime('%Y', p.created_at) = ?
+      GROUP BY strftime('%Y-%m', p.created_at)
+    `, [year]);
+
+    const costRows = db.all(`
+      SELECT strftime('%Y-%m', st.created_at) as month,
+             COALESCE(SUM(st.quantity * p.cost_price), 0) as cost
+      FROM stock_transactions st
+      JOIN products p ON p.id = st.product_id
+      WHERE st.quantity > 0
+        AND st.type IN ('receive', 'adjust')
+        AND strftime('%Y', st.created_at) = ?
+      GROUP BY strftime('%Y-%m', st.created_at)
+    `, [year]);
+
+    const costMap = {};
+    costRows.forEach(r => { costMap[r.month] = r.cost; });
+    const allMonths = [...new Set([...revenueRows.map(r=>r.month), ...Object.keys(costMap)])].sort();
+    const rows = allMonths.map(month => {
+      const rev = revenueRows.find(r => r.month === month) || { revenue: 0, total_orders: 0 };
+      const cost = costMap[month] || 0;
+      const mIdx = parseInt(month.split('-')[1]) - 1;
+      return {
+        month, revenue: rev.revenue, cost, profit: rev.revenue - cost,
+        total_orders: rev.total_orders,
+        label: `${THAI_MONTHS[mIdx]} ${parseInt(year)+543}`,
+      };
+    });
+
+    const totals = {
+      revenue:      rows.reduce((s,r) => s+r.revenue, 0),
+      cost:         rows.reduce((s,r) => s+r.cost, 0),
+      profit:       rows.reduce((s,r) => s+r.profit, 0),
+      total_orders: rows.reduce((s,r) => s+r.total_orders, 0),
+    };
+    res.json({ success: true, data: { rows, totals, year } });
+  } catch (err) { next(err); }
+});
+
+module.exports = router;
+

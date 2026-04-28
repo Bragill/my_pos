@@ -1,0 +1,32 @@
+﻿/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,jsx}'],
+  theme: {
+    extend: {
+      fontFamily: {
+        thai: ['Prompt', 'Noto Sans Thai', 'sans-serif'],
+      },
+      colors: {
+        primary: { 50: '#eef2ff', 100: '#e0e7ff', 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3' },
+        success: { 50: '#f0fdf4', 500: '#22c55e', 600: '#16a34a', 700: '#15803d' },
+        danger:  { 50: '#fff1f2', 500: '#f43f5e', 600: '#e11d48', 700: '#be123c' },
+        surface: { DEFAULT: '#f8f7ff', card: '#ffffff' },
+      },
+      minHeight: { touch: '44px' },
+      minWidth:  { touch: '44px' },
+      backgroundImage: {
+        'grad-primary': 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+        'grad-success': 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+        'grad-danger':  'linear-gradient(135deg, #f43f5e 0%, #e11d48 100%)',
+        'grad-nav':     'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+        'grad-page':    'linear-gradient(160deg, #f8f7ff 0%, #ede9fe 100%)',
+      },
+      boxShadow: {
+        'glow': '0 4px 24px 0 rgba(99,102,241,0.18)',
+        'glow-sm': '0 2px 12px 0 rgba(99,102,241,0.12)',
+        'card': '0 2px 16px 0 rgba(99,102,241,0.08)',
+      },
+    },
+  },
+  plugins: [],
+};
