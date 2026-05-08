@@ -11,6 +11,71 @@ import toast from "react-hot-toast";
 import BarcodeScanner from "../components/BarcodeScanner";
 import ScanIcon from "../components/ScanIcon";
 
+const CartItem = ({ item, onUpdateQuantity, onRemove }) => {
+  const [inputValue, setInputValue] = useState(item.quantity);
+  const debounceTimerRef = useRef(null);
+
+  // Keep local state in sync with external changes
+  useEffect(() => {
+    // Only sync if the input is not currently focused to avoid jumping while typing
+    if (document.activeElement !== document.getElementById(`qty-input-${item.product_id}`)) {
+      setInputValue(item.quantity);
+    }
+  }, [item.quantity, item.product_id]);
+
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setInputValue(val); // Local state responsive
+    
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+
+    const parsed = parseInt(val);
+    if (!isNaN(parsed) && parsed > 0) {
+      // 1000ms debounce for multi-digit entry
+      debounceTimerRef.current = setTimeout(() => {
+        onUpdateQuantity(item.product_id, parsed);
+      }, 1000);
+    }
+  };
+
+  const handleBlur = () => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    const parsed = parseInt(inputValue);
+    if (isNaN(parsed) || parsed <= 0) {
+      setInputValue(item.quantity);
+    } else {
+      onUpdateQuantity(item.product_id, parsed);
+    }
+  };
+
+  return (
+    <div className="p-3 flex items-center gap-2">
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-gray-800 truncate">{item.name}</p>
+        <p className="text-xs text-gray-500">{formatCurrency(item.selling_price)}</p>
+      </div>
+      <div className="flex items-center gap-1">
+        <button onClick={() => onUpdateQuantity(item.product_id, item.quantity - 1)}
+          className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center font-bold text-lg">−</button>
+        <input 
+          id={`qty-input-${item.product_id}`}
+          type="number" 
+          min="1"
+          value={inputValue}
+          onChange={handleInputChange}
+          onBlur={handleBlur}
+          onFocus={(e) => e.target.select()}
+          className="w-12 text-center text-sm font-bold bg-gray-50 rounded-lg py-1 border border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+        />
+        <button onClick={() => onUpdateQuantity(item.product_id, item.quantity + 1)}
+          className="w-8 h-8 rounded-full bg-blue-100 hover:bg-blue-200 text-blue-700 flex items-center justify-center font-bold text-lg">+</button>
+      </div>
+      <span className="text-sm font-semibold w-16 text-right">{formatCurrency(item.selling_price * item.quantity)}</span>
+      <button onClick={() => onRemove(item.product_id)} className="text-red-400 hover:text-red-600 ml-1 text-lg leading-none">✕</button>
+    </div>
+  );
+};
+
 export default function POSPage() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -31,9 +96,12 @@ export default function POSPage() {
 
   // Custom addItem to trigger bubble notification
   const addItem = (item) => {
+    const existingInCart = cart.items.find(i => i.product_id === item.id);
+    const currentQty = existingInCart ? existingInCart.quantity : 0;
+
     // Check stock before adding
-    if (item.stock_quantity <= 0) {
-      toast.error(`สินค้า "${item.name}" หมดสต๊อก`, { 
+    if (currentQty + 1 > item.stock_quantity) {
+      toast.error(`สินค้า "${item.name}" มีในคลังเพียง ${item.stock_quantity} ชิ้น`, { 
         id: 'out-of-stock',
         duration: 2000,
         position: 'top-center',
@@ -58,6 +126,26 @@ export default function POSPage() {
         bubbleTimeoutRef.current = null;
       }, 3000);
     }, 10);
+  };
+
+  const handleUpdateQuantity = (productId, newQty) => {
+    if (newQty <= 0) {
+      updateQuantity(productId, 0); // This will remove the item
+      return;
+    }
+
+    const product = products.find(p => p.id === productId);
+    if (product && newQty > product.stock_quantity) {
+      toast.error(`สินค้า "${product.name}" มีในคลังเพียง ${product.stock_quantity} ชิ้น (ปรับให้เท่ากับจำนวนสูงสุดแล้ว)`, { 
+        id: 'out-of-stock-update',
+        duration: 2000,
+        position: 'top-center'
+      });
+      // Auto-cap to max stock
+      updateQuantity(productId, product.stock_quantity);
+      return;
+    }
+    updateQuantity(productId, newQty);
   };
 
 
@@ -222,6 +310,7 @@ export default function POSPage() {
       if (navigator.onLine) {
         await api.post("/orders", orderData);
         toast.success(isOutstanding ? "บันทึกค้างชำระสำเร็จ!" : "ชำระเงินสำเร็จ!");
+        loadProducts(); // Refresh stock
       } else {
         await savePendingOrder(orderData);
         toast.success("บันทึกออฟไลน์ - จะซิงค์เมื่อออนไลน์");
@@ -322,21 +411,12 @@ export default function POSPage() {
       ) : (
         <div className="divide-y divide-gray-100">
           {cart.items.map((item) => (
-            <div key={item.product_id} className="p-3 flex items-center gap-2">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-800 truncate">{item.name}</p>
-                <p className="text-xs text-gray-500">{formatCurrency(item.selling_price)}</p>
-              </div>
-              <div className="flex items-center gap-1">
-                <button onClick={() => updateQuantity(item.product_id, item.quantity - 1)}
-                  className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center font-bold text-lg">−</button>
-                <span className="w-7 text-center text-sm font-bold">{item.quantity}</span>
-                <button onClick={() => updateQuantity(item.product_id, item.quantity + 1)}
-                  className="w-8 h-8 rounded-full bg-blue-100 hover:bg-blue-200 text-blue-700 flex items-center justify-center font-bold text-lg">+</button>
-              </div>
-              <span className="text-sm font-semibold w-16 text-right">{formatCurrency(item.selling_price * item.quantity)}</span>
-              <button onClick={() => removeItem(item.product_id)} className="text-red-400 hover:text-red-600 ml-1 text-lg leading-none">✕</button>
-            </div>
+            <CartItem 
+              key={item.product_id} 
+              item={item} 
+              onUpdateQuantity={handleUpdateQuantity}
+              onRemove={removeItem}
+            />
           ))}
         </div>
       )}
@@ -373,7 +453,7 @@ export default function POSPage() {
   );
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)]" style={{ background: 'linear-gradient(160deg,#fff0f0 0%,#fdf0ff 50%,#f0f0ff 100%)' }}>
+    <div className="flex flex-col h-[calc(100dvh-56px)]" style={{ background: 'linear-gradient(160deg,#fff0f0 0%,#fdf0ff 50%,#f0f0ff 100%)' }}>
 
       {/* DESKTOP (md+) */}
       <div className="hidden md:flex flex-1 min-h-0">

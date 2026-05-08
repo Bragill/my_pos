@@ -5,6 +5,7 @@ import ocrService from '../services/ocrService';
 import api from '../services/api';
 import BarcodeScanner from '../components/BarcodeScanner';
 import ScanIcon from '../components/ScanIcon';
+import { formatDate } from '../utils/format';
 
 export default function OcrPage() {
     const [receipts, setReceipts] = useState([]);
@@ -111,7 +112,22 @@ export default function OcrPage() {
         
         if (field === 'product_id') {
             const prod = products.find(p => p.id === value);
-            newItems[index].matched_name = prod ? prod.name : null;
+            if (prod) {
+                newItems[index].matched_name = prod.name;
+                const receiptCost = parseFloat(newItems[index].unit_price) || 0;
+                const productCost = parseFloat(prod.cost_price) || 0;
+                if (receiptCost > 0 && productCost > 0 && Math.abs(receiptCost - productCost) > 0.01) {
+                    newItems[index]._priceMismatch = true;
+                    newItems[index]._mismatchInfo = { productName: prod.name, existingCost: productCost, receiptCost };
+                } else {
+                    newItems[index]._priceMismatch = false;
+                    newItems[index]._mismatchInfo = null;
+                }
+            } else {
+                newItems[index].matched_name = null;
+                newItems[index]._priceMismatch = false;
+                newItems[index]._mismatchInfo = null;
+            }
         }
         
         setEditingItems(newItems);
@@ -125,6 +141,12 @@ export default function OcrPage() {
     const handleSaveEdits = async () => {
         setLoading(true);
         try {
+            // Sync product name with stock raw_name where they differ
+            for (const item of editingItems) {
+                if (item.product_id && item.raw_name && item.matched_name && item.raw_name !== item.matched_name) {
+                    try { await api.patch(`/products/${item.product_id}/name`, { name: item.raw_name }); } catch {}
+                }
+            }
             const payload = {
                 items: editingItems,
                 payment_method: selectedReceipt.payment_method,
@@ -137,6 +159,7 @@ export default function OcrPage() {
             setSelectedReceipt(res.data.data);
             setIsEditing(false);
             fetchReceipts();
+            fetchProducts();
         } catch (err) {
             toast.error('เกิดข้อผิดพลาดในการบันทึก');
         } finally {
@@ -369,7 +392,7 @@ export default function OcrPage() {
                             <BarcodeScanner 
                                 onDetected={handleScan} 
                                 onClose={() => setShowScanner(false)}
-                                isContinuous={true}
+                                isContinuous={false}
                             />
                         )}
 
@@ -468,7 +491,7 @@ export default function OcrPage() {
                                         {r.status}
                                     </span>
                                     <span className="text-[10px] text-gray-400">
-                                        {new Date(r.created_at).toLocaleString('th-TH')}
+                                        {formatDate(r.created_at)}
                                     </span>
                                 </div>
                                 <div className="font-bold text-gray-800 truncate">{r.vendor_name || 'กำลังประมวลผล...'}</div>
@@ -575,6 +598,19 @@ export default function OcrPage() {
                                                                     <option key={p.id} value={p.id}>{p.name}</option>
                                                                 ))}
                                                             </select>
+                                                            {item._priceMismatch && item._mismatchInfo && (
+                                                                <div className="mt-1 p-2 bg-amber-50 border border-amber-200 rounded-xl text-[10px]">
+                                                                    <p className="font-bold text-amber-700">⚠ ราคาทุนต่างจากระบบ</p>
+                                                                    <p className="text-amber-600">ระบบ: ฿{item._mismatchInfo.existingCost} → ใบเสร็จ: ฿{item._mismatchInfo.receiptCost}</p>
+                                                                    <button
+                                                                        type="button"
+                                                                        className="mt-1 w-full text-[10px] px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-800 font-bold rounded-lg transition-colors"
+                                                                        onClick={() => { setItemToCreate({ ...item, raw_name: item._mismatchInfo.productName, unit_price: item._mismatchInfo.receiptCost }); setShowAddProductModal(true); handleItemChange(idx, 'product_id', ''); }}
+                                                                    >
+                                                                        ✨ สร้างสินค้าใหม่ด้วยราคานี้
+                                                                    </button>
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     ) : (
                                                         <>

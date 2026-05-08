@@ -8,29 +8,66 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5174,
     https: true,
-    proxy: { '/api': 'http://localhost:3001' },
+    hmr: {
+      host: 'localhost',
+    },
+    proxy: { 
+      '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+      }
+    },
   },
   plugins: [
     react(),
     mkcert(),
     VitePWA({
       injectRegister: 'auto',
-      devOptions: { enabled: true },
       registerType: 'autoUpdate',
+      manifestFilename: 'manifest.json',
+      devOptions: { enabled: true },
+      includeAssets: ['favicon.ico', 'icons/*.png'],
       manifest: {
-        name: 'POS',
+        name: 'POS System',
         short_name: 'POS',
-        theme_color: '#2563eb',
-        background_color: '#f8fafc',
-        display: 'standalone',
-        orientation: 'any',
+        description: 'Point of Sale System',
+        theme_color: '#EB0000',
+        background_color: '#ffffff',
+        display: 'fullscreen',
+        orientation: 'portrait',
         start_url: '/',
+        scope: '/',
+        id: '/',
         icons: [
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+          {
+            src: '/icons/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: '/icons/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable'
+          },
+          {
+            src: '/icons/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: '/icons/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
+          }
         ],
       },
-      workbox: { globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'] },
+      workbox: { 
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+      },
     }),
   ],
 });

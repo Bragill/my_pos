@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 
 const navItems = [
   { path: '/pos', label: 'หน้าขาย', icon: '🛒', roles: ['admin', 'manager', 'cashier'] },
+  { path: '/sales', label: 'ประวัติการขาย', icon: '📜', roles: ['admin', 'manager', 'cashier'] },
   { path: '/dashboard', label: 'แดชบอร์ด', icon: '📊', roles: ['admin', 'manager'] },
   { path: '/products', label: 'สินค้า', icon: '📦', roles: ['admin', 'manager'] },
   { path: '/inventory', label: 'สต๊อก', icon: '🏪', roles: ['admin', 'manager'] },
@@ -231,7 +232,7 @@ function HamburgerMenu({ navItems, user, onLogout }) {
           <div className="relative w-72 h-full bg-white shadow-2xl flex flex-col animate-slide-right">
             {/* Header with User Info */}
             <div 
-              className="p-6 pb-8 text-white relative overflow-hidden"
+              className="p-6 pb-8 text-white relative overflow-hidden pt-[calc(1.5rem+env(safe-area-inset-top))]"
               style={{ background: 'linear-gradient(135deg, #EB0000 0%, #95008A 50%, #3300FC 100%)' }}
             >
               <div className="relative z-10">
@@ -304,9 +305,9 @@ export default function Layout() {
   const visibleNav = navItems.filter((item) => item.roles.includes(user?.role));
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: 'linear-gradient(160deg,#fff0f0 0%,#fdf0ff 50%,#f0f0ff 100%)' }}>
+    <div className="min-h-[100dvh] flex flex-col" style={{ background: 'linear-gradient(160deg,#fff0f0 0%,#fdf0ff 50%,#f0f0ff 100%)' }}>
       {/* Navbar */}
-      <nav className="shadow-md px-4 py-2 flex items-center justify-between sticky top-0 z-40 h-14"
+      <nav className="shadow-md px-4 py-2 flex items-center justify-between sticky top-0 z-40 min-h-[56px] h-[calc(56px+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)]"
         style={{ background: '#EB0000', backgroundImage: 'linear-gradient(to left, #3300FC, #95008A, #EB0000)' }}>
         
         <div className="flex items-center gap-3">

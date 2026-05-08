@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const { AppError } = require('./errorHandler');
 const db = require('../database/dbHelper');
 
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return next(new AppError('กรุณาเข้าสู่ระบบ', 401));
@@ -23,14 +23,14 @@ const authenticate = (req, res, next) => {
     
     // If storeId is missing, try to get the first assigned store
     if (!storeId || storeId === 'null' || storeId === 'undefined') {
-      const firstStore = db.get("SELECT store_id FROM user_stores WHERE user_id = ? AND is_active = 1 LIMIT 1", [req.user.id]);
+      const firstStore = await db.get("SELECT store_id FROM user_stores WHERE user_id = ? AND is_active = 1 LIMIT 1", [req.user.id]);
       storeId = firstStore?.store_id;
     }
 
     if (storeId) {
       // Validate access if not admin
       if (req.user.role !== 'admin') {
-        const hasAccess = db.get("SELECT 1 FROM user_stores WHERE user_id = ? AND store_id = ? AND is_active = 1", [req.user.id, storeId]);
+        const hasAccess = await db.get("SELECT 1 FROM user_stores WHERE user_id = ? AND store_id = ? AND is_active = 1", [req.user.id, storeId]);
         if (!hasAccess) {
           console.warn(`Access denied for user ${req.user.username} to store ${storeId}`);
           return next(new AppError('คุณไม่มีสิทธิ์เข้าถึงสาขานี้', 403));

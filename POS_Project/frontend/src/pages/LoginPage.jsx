@@ -3,22 +3,50 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import toast from 'react-hot-toast';
 
+// ─── Step constants ────────────────────────────────────────────────
+const STEP_AUTH = 'auth';       // PIN / password entry
+const STEP_STORE = 'store';     // Store selection
+
 export default function LoginPage() {
   const [mode, setMode] = useState('pin'); // 'password' | 'pin'
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login, pinLogin } = useAuth();
+  const [step, setStep] = useState(STEP_AUTH);
+  const [pendingStores, setPendingStores] = useState([]);   // stores returned after auth
+  const { login, pinLogin, selectStore } = useAuth();
   const navigate = useNavigate();
 
+  // ─── After successful auth, decide what step to go to ───────────
+  const handleAuthSuccess = (userStores) => {
+    if (userStores.length === 0) {
+      toast.error('บัญชีนี้ไม่มีร้านค้าที่กำหนด กรุณาติดต่อผู้ดูแลระบบ');
+      return;
+    }
+    if (userStores.length === 1) {
+      // Only one store — auto-select and continue
+      try {
+        selectStore(userStores[0].id, userStores);
+        toast.success('เข้าสู่ระบบสำเร็จ');
+        navigate('/pos');
+      } catch {
+        toast.error('เกิดข้อผิดพลาดในการเลือกร้านค้า');
+      }
+    } else {
+      // Multiple stores — let user pick
+      setPendingStores(userStores);
+      setStep(STEP_STORE);
+    }
+  };
+
+  // ─── Password login ──────────────────────────────────────────────
   const handlePasswordLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      await login(username, password);
-      toast.success('เข้าสู่ระบบสำเร็จ');
-      navigate('/pos');
+      const { userStores } = await login(username, password);
+      handleAuthSuccess(userStores);
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'เข้าสู่ระบบไม่สำเร็จ');
     } finally {
@@ -26,14 +54,14 @@ export default function LoginPage() {
     }
   };
 
+  // ─── PIN login ───────────────────────────────────────────────────
   const handlePinLogin = async (pinValue) => {
     if (pinValue.length < 4) return;
     setLoading(true);
     try {
-      await pinLogin(pinValue);
-      toast.success('เข้าสู่ระบบสำเร็จ');
-      navigate('/pos');
-    } catch (err) {
+      const { userStores } = await pinLogin(pinValue);
+      handleAuthSuccess(userStores);
+    } catch {
       toast.error('PIN Code ไม่ถูกต้อง');
       setPin('');
     } finally {
@@ -50,8 +78,20 @@ export default function LoginPage() {
     }
   };
 
-  // Add keyboard support
+  // ─── Store selection via card click ─────────────────────────────
+  const handleSelectStore = (storeId) => {
+    try {
+      selectStore(storeId, pendingStores);
+      toast.success('เลือกร้านค้าสำเร็จ');
+      navigate('/pos');
+    } catch (err) {
+      toast.error(err.message || 'ไม่พบ Store ID นี้ในระบบ');
+    }
+  };
+
+  // ─── Keyboard support for PIN mode ──────────────────────────────
   useEffect(() => {
+    if (step !== STEP_AUTH) return;
     const handleKeyDown = (e) => {
       if (mode === 'pin') {
         if (e.key >= '0' && e.key <= '9') {
@@ -63,7 +103,7 @@ export default function LoginPage() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [mode, pin]);
+  }, [mode, pin, step]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
@@ -87,92 +127,137 @@ export default function LoginPage() {
           <p className="text-orange-100 text-sm mt-1">ระบบขายหน้าร้าน</p>
         </div>
 
-        {/* Mode Toggle */}
-        <div className="flex bg-white/10 rounded-2xl p-1 mb-6 border border-white/20">
-          {[['pin', '🔢 PIN Code'], ['password', '🔑 รหัสผ่าน']].map(([val, label]) => (
-            <button key={val} onClick={() => { setMode(val); setPin(''); }}
-              className={'flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ' +
-                (mode === val ? 'bg-white text-indigo-700 shadow-lg' : 'text-white/70 hover:text-white')}>
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Password Mode */}
-        {mode === 'password' && (
-          <form onSubmit={handlePasswordLogin} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-white/80 mb-1.5">ชื่อผู้ใช้</label>
-              <input type="text" value={username} onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-white/20 border border-white/30 rounded-xl px-4 py-3 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-white/50 transition-all"
-                placeholder="กรอกชื่อผู้ใช้" required autoComplete="username" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-white/80 mb-1.5">รหัสผ่าน</label>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-white/20 border border-white/30 rounded-xl px-4 py-3 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-white/50 transition-all"
-                placeholder="กรอกรหัสผ่าน" required autoComplete="current-password" />
-            </div>
-            <button type="submit" disabled={loading}
-              className="w-full bg-white text-purple-700 font-bold py-3.5 rounded-2xl shadow-lg hover:bg-red-50 active:scale-95 transition-all mt-2 disabled:opacity-60 text-base">
-              {loading ? '⏳ กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ →'}
-            </button>
-          </form>
-        )}
-
-        {/* PIN Mode */}
-        {mode === 'pin' && (
+        {/* ══════════════════════════════════════════ STEP: STORE PICKER */}
+        {step === STEP_STORE && (
           <div>
-            <div className="flex justify-center gap-4 mb-8">
-              {[0, 1, 2, 3].map(i => (
-                <div key={i} className="relative group">
-                  {/* Outer Wrapper: Only show gradient when filled */}
-                  <div className={'w-14 h-16 rounded-2xl p-[2px] transition-all duration-300 ' +
-                    (pin.length > i 
-                      ? 'bg-gradient-to-br from-indigo-400 via-purple-400 to-pink-400 shadow-[0_0_20px_rgba(168,85,247,0.4)] scale-110' 
-                      : 'bg-transparent border border-white/20')}>
-                    
-                    {/* Inner Content Box */}
-                    <div className={'w-full h-full rounded-[14px] flex items-center justify-center text-2xl font-bold transition-all duration-200 ' +
-                      (pin.length > i 
-                        ? 'bg-white/20 text-white backdrop-blur-md' 
-                        : 'bg-white/5 text-white/30')}>
-                      {pin[i] ? (
-                        <span className="animate-in zoom-in duration-300 drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]">●</span>
-                      ) : (
-                        <span className="text-white/10 text-xs">○</span>
-                      )}
-                    </div>
-                  </div>
-                  
-                  {/* Subtle border highlight for active field (No gradient) */}
-                  {pin.length === i && !loading && (
-                    <div className="absolute inset-0 rounded-2xl border-2 border-white/40 animate-pulse" />
-                  )}
-                </div>
-              ))}
+            {/* Header */}
+            <div className="text-center mb-6">
+              <p className="text-white font-semibold text-lg">เลือกร้านค้า</p>
+              <p className="text-white/60 text-xs mt-1">บัญชีของคุณมีสิทธิ์เข้าถึง {pendingStores.length} ร้านค้า</p>
             </div>
-            <div className="grid grid-cols-3 gap-3">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key, idx) => (
-                <button key={idx}
-                  onClick={() => {
-                    if (key === 'del') setPin(p => p.slice(0, -1));
-                    else if (key !== null) handlePinPress(String(key));
-                  }}
-                  disabled={key === null || loading}
-                  className={
-                    'h-16 rounded-2xl text-xl font-bold transition-all active:scale-90 ' +
-                    (key === null ? 'invisible' :
-                      key === 'del'
-                        ? 'bg-white/10 text-red-300 hover:bg-red-500/30 border border-white/20'
-                        : 'bg-white/20 text-white hover:bg-white/35 border border-white/25 shadow-sm backdrop-blur-sm hover:border-white/50')
-                  }>
-                  {key === 'del' ? '⌫' : key}
+
+            {/* Store cards */}
+            <div className="space-y-3 mb-6 max-h-56 overflow-y-auto pr-1">
+              {pendingStores.map(store => (
+                <button
+                  key={store.id}
+                  id={`store-btn-${store.id}`}
+                  onClick={() => handleSelectStore(store.id)}
+                  className="w-full flex items-center gap-3 bg-white/20 hover:bg-white/30 active:scale-95 border border-white/30 hover:border-white/50 rounded-2xl px-4 py-3.5 text-left transition-all duration-200 shadow-sm group"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center text-lg shrink-0 group-hover:scale-110 transition-transform">
+                    🏪
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white font-semibold text-sm truncate">{store.name}</p>
+                  </div>
+                  <span className="text-white/40 group-hover:text-white transition-colors text-lg">›</span>
                 </button>
               ))}
             </div>
-            {loading && <p className="text-center text-orange-100 text-sm mt-6 animate-pulse">⏳ กำลังตรวจสอบ...</p>}
+
+            {/* Back button */}
+            <button
+              id="store-back-btn"
+              onClick={() => { setStep(STEP_AUTH); setPin(''); setPendingStores([]); }}
+              className="w-full mt-4 py-2.5 rounded-xl text-white/60 hover:text-white text-sm transition-all hover:bg-white/10"
+            >
+              ← ย้อนกลับ
+            </button>
           </div>
+        )}
+
+        {/* ══════════════════════════════════════════ STEP: AUTH */}
+        {step === STEP_AUTH && (
+          <>
+            {/* Mode Toggle */}
+            <div className="flex bg-white/10 rounded-2xl p-1 mb-6 border border-white/20">
+              {[['pin', '🔢 PIN Code'], ['password', '🔑 รหัสผ่าน']].map(([val, label]) => (
+                <button key={val} onClick={() => { setMode(val); setPin(''); }}
+                  className={'flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ' +
+                    (mode === val ? 'bg-white text-indigo-700 shadow-lg' : 'text-white/70 hover:text-white')}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Password Mode */}
+            {mode === 'password' && (
+              <form onSubmit={handlePasswordLogin} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-white/80 mb-1.5">ชื่อผู้ใช้</label>
+                  <input type="text" value={username} onChange={(e) => setUsername(e.target.value)}
+                    className="w-full bg-white/20 border border-white/30 rounded-xl px-4 py-3 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-white/50 transition-all"
+                    placeholder="กรอกชื่อผู้ใช้" required autoComplete="username" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-white/80 mb-1.5">รหัสผ่าน</label>
+                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-white/20 border border-white/30 rounded-xl px-4 py-3 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-white/50 transition-all"
+                    placeholder="กรอกรหัสผ่าน" required autoComplete="current-password" />
+                </div>
+                <button type="submit" disabled={loading}
+                  className="w-full bg-white text-purple-700 font-bold py-3.5 rounded-2xl shadow-lg hover:bg-red-50 active:scale-95 transition-all mt-2 disabled:opacity-60 text-base">
+                  {loading ? '⏳ กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ →'}
+                </button>
+              </form>
+            )}
+
+            {/* PIN Mode */}
+            {mode === 'pin' && (
+              <div>
+                <div className="flex justify-center gap-4 mb-8">
+                  {[0, 1, 2, 3].map(i => (
+                    <div key={i} className="relative group">
+                      {/* Outer Wrapper: Only show gradient when filled */}
+                      <div className={'w-14 h-16 rounded-2xl p-[2px] transition-all duration-300 ' +
+                        (pin.length > i
+                          ? 'bg-gradient-to-br from-indigo-400 via-purple-400 to-pink-400 shadow-[0_0_20px_rgba(168,85,247,0.4)] scale-110'
+                          : 'bg-transparent border border-white/20')}>
+
+                        {/* Inner Content Box */}
+                        <div className={'w-full h-full rounded-[14px] flex items-center justify-center text-2xl font-bold transition-all duration-200 ' +
+                          (pin.length > i
+                            ? 'bg-white/20 text-white backdrop-blur-md'
+                            : 'bg-white/5 text-white/30')}>
+                          {pin[i] ? (
+                            <span className="animate-in zoom-in duration-300 drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]">●</span>
+                          ) : (
+                            <span className="text-white/10 text-xs">○</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Subtle border highlight for active field (No gradient) */}
+                      {pin.length === i && !loading && (
+                        <div className="absolute inset-0 rounded-2xl border-2 border-white/40 animate-pulse" />
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key, idx) => (
+                    <button key={idx}
+                      onClick={() => {
+                        if (key === 'del') setPin(p => p.slice(0, -1));
+                        else if (key !== null) handlePinPress(String(key));
+                      }}
+                      disabled={key === null || loading}
+                      className={
+                        'h-16 rounded-2xl text-xl font-bold transition-all active:scale-90 ' +
+                        (key === null ? 'invisible' :
+                          key === 'del'
+                            ? 'bg-white/10 text-red-300 hover:bg-red-500/30 border border-white/20'
+                            : 'bg-white/20 text-white hover:bg-white/35 border border-white/25 shadow-sm backdrop-blur-sm hover:border-white/50')
+                      }>
+                      {key === 'del' ? '⌫' : key}
+                    </button>
+                  ))}
+                </div>
+                {loading && <p className="text-center text-orange-100 text-sm mt-6 animate-pulse">⏳ กำลังตรวจสอบ...</p>}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

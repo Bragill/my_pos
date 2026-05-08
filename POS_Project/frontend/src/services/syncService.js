@@ -30,4 +30,9 @@ if (typeof window !== 'undefined') {
     console.log('🌐 กลับมาออนไลน์ - เริ่มซิงค์ข้อมูล...');
     syncPendingOrders();
   });
+
+  // Initial sync attempt on load
+  if (navigator.onLine) {
+    syncPendingOrders();
+  }
 }

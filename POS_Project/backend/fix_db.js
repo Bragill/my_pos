@@ -1,13 +1,9 @@
-const initSqlJs = require('sql.js');
-const fs = require('fs');
-const path = require('path');
-const DB_PATH = path.join(__dirname, 'pos_system.db');
+const db = require('./src/database/dbHelper');
 
-initSqlJs().then(SQL => {
-  const buf = fs.readFileSync(DB_PATH);
-  const db = new SQL.Database(buf);
-
-  db.run(`CREATE TABLE IF NOT EXISTS debtors (
+async function fix() {
+  await db.init();
+  
+  await db.run(`CREATE TABLE IF NOT EXISTS debtors (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     phone TEXT,
@@ -15,17 +11,23 @@ initSqlJs().then(SQL => {
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
   )`);
-  console.log('debtors table created');
+  console.log('debtors table ensured');
 
-  try { db.run('ALTER TABLE orders ADD COLUMN debtor_id TEXT'); console.log('debtor_id column added'); }
-  catch(e) { console.log('debtor_id already exists:', e.message); }
-
-  fs.writeFileSync(DB_PATH, Buffer.from(db.export()));
+  try { 
+    await db.run('ALTER TABLE orders ADD COLUMN debtor_id TEXT'); 
+    console.log('debtor_id column added'); 
+  } catch(e) { 
+    console.log('debtor_id already exists or error:', e.message); 
+  }
 
   // Verify
-  const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'")[0].values.map(r=>r[0]);
-  const orderCols = db.exec('PRAGMA table_info(orders)')[0].values.map(r=>r[1]);
-  console.log('Tables:', tables.join(', '));
-  console.log('Orders cols:', orderCols.join(', '));
-  console.log('DB saved successfully!');
+  const tables = await db.all("SELECT name FROM sqlite_master WHERE type='table'");
+  console.log('Tables:', tables.map(t => t.name).join(', '));
+  console.log('Fix completed on D1!');
+  process.exit(0);
+}
+
+fix().catch(err => {
+  console.error(err);
+  process.exit(1);
 });

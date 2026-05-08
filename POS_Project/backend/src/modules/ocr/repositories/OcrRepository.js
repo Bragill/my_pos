@@ -17,13 +17,13 @@ class OcrRepository {
             data.storage_key, 
             data.status || 'pending'
         ];
-        db.run(sql, params);
+        await db.run(sql, params);
         return this.getReceiptById(id);
     }
 
     async getReceiptById(id) {
         const sql = `SELECT * FROM ocr_receipts WHERE id = ?`;
-        const receipt = db.get(sql, [id]);
+        const receipt = await db.get(sql, [id]);
         if (receipt) {
             receipt.items = await this.getReceiptItems(id);
         }
@@ -31,26 +31,35 @@ class OcrRepository {
     }
 
     async updateReceipt(id, data) {
+        const allowedColumns = [
+            'store_id', 'user_id', 'image_url', 'raw_text', 'total_amount', 
+            'status', 'vendor_name', 'receipt_date', 'payment_method', 
+            'transaction_id', 'error_message', 'raw_ocr_data', 'structured_data'
+        ];
+
         const fields = [];
         const params = [];
         
-        data.updated_at = new Date().toISOString();
+        // Use SQL for updated_at to stay in sync with +7 hours
+        fields.push('updated_at = (datetime(\'now\', \'+7 hours\'))');
 
         for (const [key, value] of Object.entries(data)) {
-            if (key === 'id') continue;
+            if (key === 'id' || key === 'updated_at' || !allowedColumns.includes(key)) continue;
             fields.push(`${key} = ?`);
             params.push(typeof value === 'object' ? JSON.stringify(value) : value);
         }
 
+        if (fields.length === 0) return this.getReceiptById(id);
+
         params.push(id);
         const sql = `UPDATE ocr_receipts SET ${fields.join(', ')} WHERE id = ?`;
-        db.run(sql, params);
+        await db.run(sql, params);
         return this.getReceiptById(id);
     }
 
     async getReceiptItems(receiptId) {
         const sql = `SELECT * FROM ocr_receipt_items WHERE receipt_id = ?`;
-        return db.all(sql, [receiptId]);
+        return await db.all(sql, [receiptId]);
     }
 
     async createReceiptItem(receiptId, item) {
@@ -71,8 +80,40 @@ class OcrRepository {
             item.unit_price || 0,
             item.total_price || 0
         ];
-        db.run(sql, params);
+        await db.run(sql, params);
         return id;
+    }
+
+    async createReceiptItems(receiptId, items) {
+        if (!items || items.length === 0) return [];
+
+        const valuePlaceholders = items.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+        const sql = `
+            INSERT INTO ocr_receipt_items (
+                id, receipt_id, product_id, raw_name, matched_name, 
+                quantity, unit_price, total_price
+            ) VALUES ${valuePlaceholders}
+        `;
+
+        const params = [];
+        const ids = [];
+        for (const item of items) {
+            const id = uuidv4();
+            ids.push(id);
+            params.push(
+                id,
+                receiptId,
+                item.product_id || null,
+                item.raw_name,
+                item.matched_name || null,
+                item.quantity || 1,
+                item.unit_price || 0,
+                item.total_price || 0
+            );
+        }
+
+        await db.run(sql, params);
+        return ids;
     }
 
     async listReceipts(storeId, limit = 20, offset = 0) {
@@ -82,14 +123,14 @@ class OcrRepository {
             ORDER BY created_at DESC 
             LIMIT ? OFFSET ?
         `;
-        return db.all(sql, [storeId, limit, offset]);
+        return await db.all(sql, [storeId, limit, offset]);
     }
 
     async deleteReceipt(id) {
         try {
             console.log(`[OCR Repository] Deleting receipt record: ${id}`);
             const deleteReceiptSql = `DELETE FROM ocr_receipts WHERE id = ?`;
-            const result = db.run(deleteReceiptSql, [id]);
+            const result = await db.run(deleteReceiptSql, [id]);
             console.log(`[OCR Repository] Deleted ${result.changes} receipt record(s)`);
             
             return result.changes > 0;

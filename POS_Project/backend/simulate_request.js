@@ -33,13 +33,13 @@ async function test() {
   try {
     let storeId = req.headers['x-store-id'];
     if (!storeId || storeId === 'null') {
-      const firstStore = db.get("SELECT store_id FROM user_stores WHERE user_id = ? AND is_active = 1 LIMIT 1", [req.user.id]);
+      const firstStore = await db.get("SELECT store_id FROM user_stores WHERE user_id = ? AND is_active = 1 LIMIT 1", [req.user.id]);
       storeId = firstStore?.store_id;
     }
 
     if (storeId) {
       if (req.user.role !== 'admin') {
-        const hasAccess = db.get("SELECT 1 FROM user_stores WHERE user_id = ? AND store_id = ? AND is_active = 1", [req.user.id, storeId]);
+        const hasAccess = await db.get("SELECT 1 FROM user_stores WHERE user_id = ? AND store_id = ? AND is_active = 1", [req.user.id, storeId]);
         if (!hasAccess) {
           console.log("Access denied");
         }
@@ -53,7 +53,7 @@ async function test() {
 
   console.log("--- Testing /stores/current logic ---");
   try {
-    const store = db.get("SELECT * FROM stores WHERE id = ?", [req.store_id]);
+    const store = await db.get("SELECT * FROM stores WHERE id = ?", [req.store_id]);
     if (!store) {
         console.log("Store not found (404)");
     } else {

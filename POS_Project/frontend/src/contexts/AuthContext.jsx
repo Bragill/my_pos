@@ -39,14 +39,8 @@ export function AuthProvider({ children }) {
     
     setUser(userData);
     setStores(userStores);
-    
-    if (userStores.length > 0) {
-      const firstStoreId = userStores[0].id;
-      localStorage.setItem('pos_active_store_id', firstStoreId);
-      setActiveStoreId(firstStoreId);
-    }
-
-    return userData;
+    // Store selection is handled by LoginPage after this returns
+    return { userData, userStores };
   };
 
   const pinLogin = async (pin) => {
@@ -59,14 +53,18 @@ export function AuthProvider({ children }) {
     
     setUser(userData);
     setStores(userStores);
+    // Store selection is handled by LoginPage after this returns
+    return { userData, userStores };
+  };
 
-    if (userStores.length > 0) {
-      const firstStoreId = userStores[0].id;
-      localStorage.setItem('pos_active_store_id', firstStoreId);
-      setActiveStoreId(firstStoreId);
+  const selectStore = (storeId, availableStores) => {
+    const found = (availableStores || stores).find(s => String(s.id) === String(storeId));
+    if (!found) {
+      throw new Error(`ไม่พบ Store ID: ${storeId}`);
     }
-
-    return userData;
+    localStorage.setItem('pos_active_store_id', found.id);
+    setActiveStoreId(found.id);
+    return found;
   };
 
   const logout = () => {
@@ -150,6 +148,7 @@ export function AuthProvider({ children }) {
       pinLogin, 
       logout, 
       switchStore, 
+      selectStore,
       refreshStores,
       refreshActiveStore 
     }}>

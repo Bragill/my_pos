@@ -22,12 +22,22 @@ class OcrService {
         // --- Image Optimization for OCR & Storage ---
         try {
             console.log('[OCR] Optimizing image...');
-            processedBuffer = await sharp(file.buffer)
-                .resize({ width: 1200, withoutEnlargement: true, fit: 'inside' })
-                .withMetadata() // PRESERVE EXIF metadata (Orientation tag)
-                .jpeg({ quality: 85 })
+            const image = sharp(file.buffer).rotate();
+            const metadata = await image.metadata();
+            
+            processedBuffer = await image
+                .resize({ width: 1800, withoutEnlargement: true, fit: 'inside' })
+                .modulate({ brightness: 1.05, contrast: 1.2 }) // Slightly boost contrast for text
+                .gamma(1.1) // Better tonal range for OCR
+                .jpeg({ 
+                    quality: 82, 
+                    progressive: true, 
+                    optimizeScans: true 
+                })
                 .toBuffer();
+            
             mimetype = 'image/jpeg';
+            console.log(`[OCR] Image optimized: ${metadata.width}x${metadata.height} -> 1800w (max), Size: ${Math.round(processedBuffer.length / 1024)}KB`);
         } catch (error) {
             console.warn('[OCR] Optimization failed, using original:', error.message);
         }
@@ -54,9 +64,12 @@ class OcrService {
 
     async runOcrTask(receiptId, buffer, mimetype, filename = 'unknown') {
         try {
+            // Small delay to ensure DB record from processUpload is committed and visible
+            await new Promise(r => setTimeout(r, 500));
+
             // Get receipt info for store_id
             const receipt = await OcrRepository.getReceiptById(receiptId);
-            if (!receipt) throw new Error('Receipt record not found');
+            if (!receipt) throw new Error(`Receipt record ${receiptId} not found in DB`);
 
             const providerName = process.env.OCR_PROVIDER || 'gemini';
             const provider = this.providers[providerName];
@@ -67,46 +80,74 @@ class OcrService {
             const data = await provider.extract(buffer, mimetype);
             console.timeEnd(`AI Extraction ${receiptId}`);
 
+            if (!data) throw new Error('AI Provider returned no data');
+
             console.time(`DB Updates ${receiptId}`);
-            // Update receipt with structured data
+            
+            // 1. Prepare items with product matching
+            const itemsToInsert = [];
+            if (Array.isArray(data.items)) {
+                for (const item of data.items) {
+                    let matchedProduct = null;
+                    try {
+                        matchedProduct = await this.findProductByName(item.raw_name, receipt.store_id);
+                    } catch (e) {
+                        console.warn(`[OCR] Product match failed for ${item.raw_name}:`, e.message);
+                    }
+                    
+                    itemsToInsert.push({
+                        ...item,
+                        product_id: matchedProduct ? matchedProduct.id : null,
+                        matched_name: matchedProduct ? matchedProduct.name : null
+                    });
+                }
+            }
+
+            // 2. Batch insert items FIRST
+            if (itemsToInsert.length > 0) {
+                await OcrRepository.createReceiptItems(receiptId, itemsToInsert);
+            }
+
+            // 3. Update main receipt status to completed LAST
             await OcrRepository.updateReceipt(receiptId, {
                 status: 'completed',
-                vendor_name: data.vendor_name,
-                receipt_date: data.receipt_date,
-                total_amount: data.total_amount,
-                payment_method: data.payment_method,
-                transaction_id: data.transaction_id,
+                vendor_name: data.vendor_name || 'Unknown',
+                receipt_date: data.receipt_date || null,
+                total_amount: data.total_amount || 0,
+                payment_method: data.payment_method || 'Unknown',
+                transaction_id: data.transaction_id || null,
                 structured_data: data
             });
 
-            // Create individual items
-            for (const item of data.items) {
-                const matchedProduct = this.findProductByName(item.raw_name, receipt.store_id);
-                
-                await OcrRepository.createReceiptItem(receiptId, {
-                    ...item,
-                    product_id: matchedProduct ? matchedProduct.id : null,
-                    matched_name: matchedProduct ? matchedProduct.name : null
-                });
-            }
             console.timeEnd(`DB Updates ${receiptId}`);
             console.timeEnd(`Total Process ${filename}`);
 
         } catch (error) {
             console.error(`OCR Task failed for ${receiptId}:`, error);
-            await OcrRepository.updateReceipt(receiptId, {
-                status: 'failed',
-                error_message: error.message
-            });
+            // Ensure status is updated to failed on error
+            try {
+                await OcrRepository.updateReceipt(receiptId, {
+                    status: 'failed',
+                    error_message: error.message
+                });
+            } catch (updateError) {
+                console.error(`Failed to set error status for ${receiptId}:`, updateError.message);
+            }
         }
     }
 
     async updateStock(productId, quantity, receiptId, storeId) {
-        // This should probably be in an InventoryService, but for Phase 1 we bridge it here
         const userSql = `SELECT user_id FROM ocr_receipts WHERE id = ?`;
-        const row = db.get(userSql, [receiptId]);
+        const row = await db.get(userSql, [receiptId]);
         if (!row) return;
         const { user_id } = row;
+
+        // Check current inventory quantity
+        const inv = await db.get(
+            `SELECT quantity FROM inventory WHERE product_id = ? AND store_id = ?`,
+            [productId, storeId]
+        );
+        const currentQty = inv ? parseInt(inv.quantity) : 0;
 
         // 1. Create Stock Transaction
         const txSql = `
@@ -114,7 +155,7 @@ class OcrService {
                 id, product_id, user_id, type, quantity, remark, store_id
             ) VALUES (?, ?, ?, 'receive', ?, ?, ?)
         `;
-        db.run(txSql, [
+        await db.run(txSql, [
             require('uuid').v4(),
             productId,
             user_id,
@@ -123,21 +164,32 @@ class OcrService {
             storeId
         ]);
 
-        // 2. Update Inventory
-        const upsertInventory = `
-            INSERT INTO inventory (product_id, store_id, quantity, updated_at)
-            VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT(product_id, store_id) DO UPDATE SET
-            quantity = inventory.quantity + excluded.quantity,
-            updated_at = datetime('now')
-        `;
-        db.run(upsertInventory, [productId, storeId, quantity]);
+        // 2. Update Inventory — replace (set) when current qty is 0, otherwise add
+        if (currentQty === 0) {
+            await db.run(
+                `INSERT INTO inventory (product_id, store_id, quantity, updated_at)
+                 VALUES (?, ?, ?, datetime('now', '+7 hours'))
+                 ON CONFLICT(product_id, store_id) DO UPDATE SET
+                 quantity = excluded.quantity,
+                 updated_at = datetime('now', '+7 hours')`,
+                [productId, storeId, quantity]
+            );
+        } else {
+            await db.run(
+                `INSERT INTO inventory (product_id, store_id, quantity, updated_at)
+                 VALUES (?, ?, ?, datetime('now', '+7 hours'))
+                 ON CONFLICT(product_id, store_id) DO UPDATE SET
+                 quantity = inventory.quantity + excluded.quantity,
+                 updated_at = datetime('now', '+7 hours')`,
+                [productId, storeId, quantity]
+            );
+        }
     }
 
-    findProductByName(name, storeId) {
+    async findProductByName(name, storeId) {
         // Simple case-insensitive search
         const sql = `SELECT id, name FROM products WHERE name LIKE ? AND store_id = ? LIMIT 1`;
-        return db.get(sql, [`%${name}%`, storeId]);
+        return await db.get(sql, [`%${name}%`, storeId]);
     }
 
     async getReceipt(id) {
@@ -163,7 +215,7 @@ class OcrService {
 
         // 2. Update items (Simple approach: delete and recreate for now)
         if (items) {
-            db.run(`DELETE FROM ocr_receipt_items WHERE receipt_id = ?`, [id]);
+            await db.run(`DELETE FROM ocr_receipt_items WHERE receipt_id = ?`, [id]);
             for (const item of items) {
                 await OcrRepository.createReceiptItem(id, item);
             }
@@ -200,7 +252,7 @@ class OcrService {
         for (const item of receipt.items) {
             if (item.product_id && parseInt(item.is_stock_updated) === 0) {
                 await this.updateStock(item.product_id, item.quantity, receiptId, storeId);
-                db.run(`UPDATE ocr_receipt_items SET is_stock_updated = 1 WHERE id = ?`, [item.id]);
+                await db.run(`UPDATE ocr_receipt_items SET is_stock_updated = 1 WHERE id = ?`, [item.id]);
             }
         }
         

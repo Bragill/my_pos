@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS ocr_receipts (
     vendor_name TEXT,
     receipt_date TEXT,
     error_message TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now', '+7 hours')),
+    updated_at TEXT DEFAULT (datetime('now', '+7 hours'))
 );
 
 CREATE TABLE IF NOT EXISTS ocr_receipt_items (

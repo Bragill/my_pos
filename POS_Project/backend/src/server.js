@@ -47,6 +47,7 @@ async function start() {
   app.use('/api/inventory', inventoryRoutes);
   app.use('/api/customers', customerRoutes);
   app.use('/api/reports', reportRoutes);
+  app.use('/api/sales', require('./routes/sales'));
   app.use('/api/settings', settingsRoutes);
   app.use('/api/shifts', shiftRoutes);
   app.use('/api/users', userRoutes);
@@ -55,7 +56,7 @@ async function start() {
   app.use('/api/ocr', ocrRoutes);
 
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', timestamp: new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }) });
   });
 
   app.use(errorHandler);
@@ -69,7 +70,9 @@ async function start() {
   });
 
   app.listen(PORT, () => {
-    console.log(`[v1.1.1] POS Backend running on http://localhost:${PORT}`);
+    console.log('==========================================');
+    console.log(`[v1.1.8] POS Backend running on http://localhost:${PORT}`);
+    console.log('==========================================');
   });
 }
 

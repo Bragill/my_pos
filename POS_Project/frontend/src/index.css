@@ -4,8 +4,10 @@
 
 body {
   font-family: 'Prompt', 'Noto Sans Thai', sans-serif;
-  background: #f5f0ff;
-  min-height: 100vh;
+  background: #f5f0ff !important;
+  color: #1e293b !important;
+  min-height: 100dvh;
+  color-scheme: light;
 }
 
 @layer utilities {

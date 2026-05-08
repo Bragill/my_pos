@@ -17,6 +17,7 @@ export function formatDate(dateString) {
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: 'Asia/Bangkok',
   }).format(new Date(dateString));
 }
 
@@ -25,5 +26,6 @@ export function formatShortDate(dateString) {
     day: '2-digit',
     month: '2-digit',
     year: '2-digit',
+    timeZone: 'Asia/Bangkok',
   }).format(new Date(dateString));
 }

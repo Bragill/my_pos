@@ -1,39 +1,123 @@
-const { getDb, saveDb } = require("./connection");
+const axios = require('axios');
+const http = require('http');
+const https = require('https');
 
-let _db = null;
+const D1_MAX_CONCURRENT = parseInt(process.env.D1_MAX_CONCURRENT || '6', 10);
+const D1_TIMEOUT_MS = parseInt(process.env.D1_TIMEOUT_MS || '8000', 10);
+const D1_QUEUE_TIMEOUT_MS = parseInt(process.env.D1_QUEUE_TIMEOUT_MS || '5000', 10);
+
+const d1HttpsAgent = new https.Agent({ keepAlive: true, maxSockets: D1_MAX_CONCURRENT, maxFreeSockets: D1_MAX_CONCURRENT });
+const d1HttpAgent = new http.Agent({ keepAlive: true, maxSockets: D1_MAX_CONCURRENT });
+
+let active = 0;
+const waiters = [];
+
+function acquire() {
+  if (active < D1_MAX_CONCURRENT) {
+    active++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const idx = waiters.indexOf(entry);
+      if (idx !== -1) waiters.splice(idx, 1);
+      reject(new Error(`D1 queue timeout after ${D1_QUEUE_TIMEOUT_MS}ms (active=${active}, waiting=${waiters.length})`));
+    }, D1_QUEUE_TIMEOUT_MS);
+    const entry = { resolve: () => { clearTimeout(timer); active++; resolve(); } };
+    waiters.push(entry);
+  });
+}
+
+function release() {
+  active--;
+  const next = waiters.shift();
+  if (next) next.resolve();
+}
+
+async function queryD1(sql, params = [], retryCount = 0) {
+  const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const DATABASE_ID = process.env.CLOUDFLARE_DATABASE_ID;
+  const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
+  const D1_API_URL = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DATABASE_ID}/query`;
+
+  const MAX_RETRIES = 3;
+  const startTime = Date.now();
+
+  await acquire();
+  try {
+    const response = await axios.post(
+      D1_API_URL,
+      {
+        sql: sql,
+        params: params,
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${API_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: D1_TIMEOUT_MS,
+        httpsAgent: d1HttpsAgent,
+        httpAgent: d1HttpAgent,
+      }
+    );
+
+    const duration = Date.now() - startTime;
+    // console.log(`[D1 Query] ${duration}ms: ${sql.substring(0, 50)}${sql.length > 50 ? '...' : ''}`);
+
+    if (!response.data.success) {
+      throw new Error(response.data.errors[0]?.message || 'D1 API Error');
+    }
+
+    const result = response.data.result;
+    if (Array.isArray(result)) {
+      return result[0];
+    }
+    return result;
+  } catch (err) {
+    const duration = Date.now() - startTime;
+    
+    // Handle Rate Limiting (429)
+    if (err.response?.status === 429 && retryCount < MAX_RETRIES) {
+      const delay = Math.pow(2, retryCount) * 1000;
+      console.warn(`[D1] Rate limited (429), retrying in ${delay}ms... (Attempt ${retryCount + 1})`);
+      await new Promise(r => setTimeout(r, delay));
+      return queryD1(sql, params, retryCount + 1);
+    }
+
+    let errorMessage = err.message;
+    if (err.response && err.response.data && err.response.data.errors) {
+      errorMessage = `D1 Error: ${err.response.data.errors[0].message}`;
+      // console.error('D1 API Response Error:', JSON.stringify(err.response.data, null, 2));
+    }
+    
+    console.error(`[D1 Error] ${duration}ms: ${errorMessage}`);
+    throw new Error(errorMessage);
+  } finally {
+    release();
+  }
+}
 
 async function init() {
-  _db = await getDb();
+  console.log('Connected to Cloudflare D1 via API');
 }
 
-function get(sql, params = []) {
-  try {
-    return _db.prepare(sql).get(params);
-  } catch (err) {
-    console.error("Database Get Error:", err, { sql, params });
-    throw err;
-  }
+async function get(sql, params = []) {
+  const result = await queryD1(sql, params);
+  return result?.results?.[0] || null;
 }
 
-function all(sql, params = []) {
-  try {
-    return _db.prepare(sql).all(params);
-  } catch (err) {
-    console.error("Database All Error:", err, { sql, params });
-    throw err;
-  }
+async function all(sql, params = []) {
+  const result = await queryD1(sql, params);
+  return result?.results || [];
 }
 
-function run(sql, params = []) {
-  try {
-    const info = _db.prepare(sql).run(params);
-    return { changes: info.changes, lastInsertRowid: info.lastInsertRowid };
-  } catch (err) {
-    console.error("Database Run Error:", err, { sql, params });
-    throw err;
-  }
+async function run(sql, params = []) {
+  const result = await queryD1(sql, params);
+  return {
+    changes: result?.meta?.changes || 0,
+    lastInsertRowid: result?.meta?.last_row_id || null
+  };
 }
 
-function getDatabase() { return _db; }
-
-module.exports = { init, get, all, run, getDatabase, saveDb };
+module.exports = { init, get, all, run };

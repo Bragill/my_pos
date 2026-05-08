@@ -1,0 +1,438 @@
+{
+  "D:\\Project\\POS\\generate_icons.js": {
+    "mtime": 1777455123.5305562,
+    "hash": "9b174c48138aa58d00dd1189b6fb7fea"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\check_db.js": {
+    "mtime": 1777450755.734432,
+    "hash": "16c0b039421db4ddb6d77b892c6e8547"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\check_schema.js": {
+    "mtime": 1776848686.2665806,
+    "hash": "9785df3cc7b3fe2a2a401470682e30e1"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\debug_db.js": {
+    "mtime": 1777423841.1869447,
+    "hash": "1909ad073da9da84cb2b61dd051be4e9"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\diagnose_login.js": {
+    "mtime": 1777453570.5516365,
+    "hash": "8a0697f2c27455473e6813a66b7d10a6"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\export_data.js": {
+    "mtime": 1777418582.7247665,
+    "hash": "6e5bc480c79eade1a7ccefaf66c46fd3"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\fix_db.js": {
+    "mtime": 1777423850.651535,
+    "hash": "f7941308a0937db81d5adcc53afd9a81"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\force_migrate.js": {
+    "mtime": 1777418916.5410209,
+    "hash": "e4a012e8479b8315efa97f1ef01679f9"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\hash_pins.js": {
+    "mtime": 1776736707.3523438,
+    "hash": "eff808e6603f5c2ddac615058935922d"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\local_data_dump.sql": {
+    "mtime": 1777418593.2222142,
+    "hash": "826db0f99ae417f20a95d3858099fbeb"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\reset_admin_pin.js": {
+    "mtime": 1777423896.4375646,
+    "hash": "cbe249eac282f00f6f77398b4b227847"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\simulate_products.js": {
+    "mtime": 1777423886.2967298,
+    "hash": "0277103a69ae6f3ff4530292fd8ff1c8"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\simulate_request.js": {
+    "mtime": 1777423866.4352272,
+    "hash": "ee46c3edf7b09193f9d26075c5491b16"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_all_pins.js": {
+    "mtime": 1776867997.2174568,
+    "hash": "bc9992e0d35eb95bc76093890048b208"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_api.js": {
+    "mtime": 1776867212.58849,
+    "hash": "73419f0314cfca181e43207994309fd5"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_bcrypt.js": {
+    "mtime": 1776867981.0275066,
+    "hash": "14bfd7bdb076e72345bf84b7f3db9746"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_denied.js": {
+    "mtime": 1776867336.5849016,
+    "hash": "73eadd058ae76683edda06701bf10c7a"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_flow.js": {
+    "mtime": 1777454140.3792973,
+    "hash": "0fdbba63f4252fe76a0a01f4202c6151"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_login_api.js": {
+    "mtime": 1777453735.8285532,
+    "hash": "33b023afec482146d7ef257fd21fa99f"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_login_repro.js": {
+    "mtime": 1778208532.60578,
+    "hash": "ac6fea51fbe23e4a6e0d4c879444f4d4"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_manager.js": {
+    "mtime": 1776867322.4368057,
+    "hash": "42380bc9083b5dc2ffcce17bc5da8c65"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_multi_header.js": {
+    "mtime": 1776867521.4593287,
+    "hash": "15b43fd68c398d3bde959fdf6b63d773"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_ocr_api.js": {
+    "mtime": 1776867309.399678,
+    "hash": "5c3eab67a0aad841e4415f17278f96a2"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_pin_api.js": {
+    "mtime": 1776868297.1326869,
+    "hash": "c8339b79ad2736449070b135e7799245"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_server.js": {
+    "mtime": 1776867295.8222637,
+    "hash": "c20518a7f856be2c47f91fd529bd3aa1"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\test_sqlite.js": {
+    "mtime": 1776848627.8256328,
+    "hash": "4a78229eb513b854985d9a979260a6e0"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\server.js": {
+    "mtime": 1777523491.5889611,
+    "hash": "cfe8614177dcb890f06e903a2412d9ac"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\ai_tools\\base.js": {
+    "mtime": 1777374581.5262842,
+    "hash": "b3296230ac2258cc287e3a739addf828"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\ai_tools\\index.js": {
+    "mtime": 1777374670.5336602,
+    "hash": "67b973f27118c774bff925887cfac65e"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\ai_tools\\mcpServer.js": {
+    "mtime": 1777374617.581551,
+    "hash": "f3268b292bbc97bc61172763130d5548"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\ai_tools\\registry.js": {
+    "mtime": 1777374584.9867566,
+    "hash": "19c137224c96a83cdb98a7b856b670b8"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\ai_tools\\tools\\ImpactAnalysisTool.js": {
+    "mtime": 1777423627.3202493,
+    "hash": "f58b06051c3c42dbdb4801687460a6f2"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\ai_tools\\tools\\InventoryTool.js": {
+    "mtime": 1777423618.4512622,
+    "hash": "b701f1c80d2db45760bb63bfef0b6fd9"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\ai_tools\\tools\\SalesTool.js": {
+    "mtime": 1777506640.4513395,
+    "hash": "3d11a809cdc2e826e807285e229eec7e"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\database\\dbHelper.js": {
+    "mtime": 1778208520.9789603,
+    "hash": "c916e0af0f68f19e1ff7e6d2b1c97136"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\database\\migrate.js": {
+    "mtime": 1777506671.5388496,
+    "hash": "a15d42cb353e4dd43384a1275df63b9f"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\database\\migrate_multistore.js": {
+    "mtime": 1777423774.6711378,
+    "hash": "ef4619d2d59f92e0c27e8c7b5a056fa5"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\database\\migrate_ocr.js": {
+    "mtime": 1777423914.0782495,
+    "hash": "5403d0860775629eca2285954923f826"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\database\\ocr_migrations.sql": {
+    "mtime": 1777507695.4063413,
+    "hash": "a986487ee7ab39d9227c4e062d8c3f80"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\database\\schema.sql": {
+    "mtime": 1776313036.0,
+    "hash": "c009e064814bfc965cd113e6931496a8"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\database\\schema_d1.sql": {
+    "mtime": 1777522508.084379,
+    "hash": "eb9d7ded46ee9d488007080eaea78df3"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\database\\seed.js": {
+    "mtime": 1777423821.90658,
+    "hash": "2871efc5564aeae109d773fb7e0f9e2c"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\middleware\\auth.js": {
+    "mtime": 1777423558.7008202,
+    "hash": "2e4d19609b169ecdef24bf905f83b22e"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\middleware\\errorHandler.js": {
+    "mtime": 1777453997.3198195,
+    "hash": "13a15c77a2eed846dfd6751cc3ddda4f"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\modules\\ocr\\ocrRoutes.js": {
+    "mtime": 1777369830.4464152,
+    "hash": "944c07d8a56610e4069975fd00dc3845"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\modules\\ocr\\controllers\\OcrController.js": {
+    "mtime": 1777369839.3227477,
+    "hash": "5e8a12d76433808996767f2561cbf858"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\modules\\ocr\\providers\\BaseOcrProvider.js": {
+    "mtime": 1776765857.1904576,
+    "hash": "c0d106baa6529503a58a6101018b5096"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\modules\\ocr\\providers\\GeminiOcrProvider.js": {
+    "mtime": 1777471586.7070484,
+    "hash": "438c28890d66c3864b631e5c0789ecb5"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\modules\\ocr\\providers\\MockOcrProvider.js": {
+    "mtime": 1776765862.2481675,
+    "hash": "fe1fddf6f2bdb86586473884800e6615"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\modules\\ocr\\repositories\\OcrRepository.js": {
+    "mtime": 1777507649.0050862,
+    "hash": "467d12004846fa0b3dea3bb905ccda77"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\modules\\ocr\\services\\OcrService.js": {
+    "mtime": 1777506685.6151536,
+    "hash": "f858c9de68762f0a54ce0a8f9b5679ca"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\modules\\ocr\\services\\StorageService.js": {
+    "mtime": 1777368120.9636123,
+    "hash": "f7080563e84682e78d94e97018b94325"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\auth.js": {
+    "mtime": 1778208831.3082256,
+    "hash": "b823a7a2ca668a06a4476743d05bf122"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\categories.js": {
+    "mtime": 1777506676.3358183,
+    "hash": "ee16b8237c676642983594c467350323"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\customers.js": {
+    "mtime": 1777506679.8992698,
+    "hash": "94bccbff11ff241217a57ed6445e441f"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\debtors.js": {
+    "mtime": 1777506685.6151536,
+    "hash": "884eeaab27c5e9f17c2bae1cb754cc49"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\inventory.js": {
+    "mtime": 1777506685.6151536,
+    "hash": "54dea771ee5bad9010930608539d7d0e"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\orders.js": {
+    "mtime": 1777506702.1641693,
+    "hash": "2d3d6e88a954017083e02e64cbc06610"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\products.js": {
+    "mtime": 1777506685.6151536,
+    "hash": "1a8a2365425e8e80372d75e0f4536e76"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\reports.js": {
+    "mtime": 1777528643.0263364,
+    "hash": "c36fc4827cbf3328a18d6d215396fe69"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\sales.js": {
+    "mtime": 1777526691.925251,
+    "hash": "1ad40460b0aadf709ccede7e89175514"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\settings.js": {
+    "mtime": 1777506685.6151536,
+    "hash": "63a760db7e4502c439b2bdd1c5d4d192"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\shifts.js": {
+    "mtime": 1777506705.4457328,
+    "hash": "77d4b9022d265003372084942bfd75e4"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\stores.js": {
+    "mtime": 1777506685.6151536,
+    "hash": "52ca4358783949a7c3ee8a1e325ba073"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\src\\routes\\users.js": {
+    "mtime": 1777506685.6151536,
+    "hash": "8ebf53192d1967fb009870cc716a3133"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\postcss.config.js": {
+    "mtime": 1776313244.0,
+    "hash": "33fad9c02cb0ec6d6030369ef6347d57"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\tailwind.config.js": {
+    "mtime": 1776413949.0,
+    "hash": "4579614530bf4d8b3fee6dd5c626e79f"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\vite.config.js": {
+    "mtime": 1777455079.2002654,
+    "hash": "8449912f134a96050b834de097c662c4"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\dev-dist\\sw.js": {
+    "mtime": 1778209149.7666876,
+    "hash": "2bb3a2488921de68910f3cd72f280116"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\dev-dist\\workbox-5a5d9309.js": {
+    "mtime": 1778209149.7666876,
+    "hash": "5e1be2ced820369c087e631fdca1a550"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\App.jsx": {
+    "mtime": 1777522613.8273485,
+    "hash": "5f60cc953e1aafb3557dcae7da76c52e"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\main.jsx": {
+    "mtime": 1777425473.3238735,
+    "hash": "e5fb0f0b2c0d368cf086e28e994e45e1"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\components\\BarcodeScanner.jsx": {
+    "mtime": 1777382257.5512984,
+    "hash": "86063c55143aa51db823cc4253ab78b9"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\components\\InstallPWA.jsx": {
+    "mtime": 1776753352.9013622,
+    "hash": "a6a5ba5b3f14fc7788d611185a2eb4d2"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\components\\Layout.jsx": {
+    "mtime": 1777522641.7900543,
+    "hash": "e3c37336878994841fe2cda87336a8bb"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\components\\ScanIcon.jsx": {
+    "mtime": 1776414674.0,
+    "hash": "5cca7ec6c959a949d3bc415fb01400f6"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\contexts\\AuthContext.jsx": {
+    "mtime": 1777455522.032653,
+    "hash": "e659294a4c81201c71c49b134c663467"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\contexts\\CartContext.jsx": {
+    "mtime": 1776605543.0,
+    "hash": "8613b973af78bbd262c5ae542115c855"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\pages\\CustomersPage.jsx": {
+    "mtime": 1776612314.0,
+    "hash": "bb29f0087e89ee44a8bec44d11c1f6ed"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\pages\\DashboardPage.jsx": {
+    "mtime": 1778212077.0123029,
+    "hash": "861196054cb7ce1e3b9533938063a6c5"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\pages\\InventoryPage.jsx": {
+    "mtime": 1776501765.0,
+    "hash": "22c50fe1e144d73f32bc3b1403c8510f"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\pages\\LoginPage.jsx": {
+    "mtime": 1777456260.8359797,
+    "hash": "6ffa4a92498bd189f69adefdd118667b"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\pages\\OcrPage.jsx": {
+    "mtime": 1777507664.4130359,
+    "hash": "0f2f183c5862f67844c0e1937ec94ef6"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\pages\\POSPage.jsx": {
+    "mtime": 1777522032.539546,
+    "hash": "2d2a090bbfc19aa3f1a5ece4e95135d0"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\pages\\ProductsPage.jsx": {
+    "mtime": 1776501747.0,
+    "hash": "5f234629fc7151872738d693b246e258"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\pages\\SalesHistoryPage.jsx": {
+    "mtime": 1777526695.720815,
+    "hash": "7fa9ca4a80537637f79338f507e68523"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\pages\\SettingsPage.jsx": {
+    "mtime": 1776917113.1974516,
+    "hash": "063880a5d43f57dc581dd297f00443de"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\services\\api.js": {
+    "mtime": 1776506291.0,
+    "hash": "ae4223080db836476f4fe22bd9708618"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\services\\ocrService.js": {
+    "mtime": 1776871787.386847,
+    "hash": "77b9084475876c971651beaa16f69e72"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\services\\offlineDB.js": {
+    "mtime": 1776313290.0,
+    "hash": "f206509bcc03ebca881c74af245dde8e"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\services\\syncService.js": {
+    "mtime": 1777425479.380955,
+    "hash": "83e75db9ba05a0089585b28b46a178d1"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\src\\utils\\format.js": {
+    "mtime": 1777506548.0177824,
+    "hash": "126ed73ed47bccb775916244c3f47a16"
+  },
+  "D:\\Project\\POS\\err.txt": {
+    "mtime": 1776700035.8201685,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "D:\\Project\\POS\\GEMINI.md": {
+    "mtime": 1778208187.8746767,
+    "hash": "1a6b8f32412895da41231d261d8a31fd"
+  },
+  "D:\\Project\\POS\\gitnexus_log.txt": {
+    "mtime": 1777879874.3738787,
+    "hash": "89556013fe053bb915459340ea5146d4"
+  },
+  "D:\\Project\\POS\\hermes_err.txt": {
+    "mtime": 1777927026.2036986,
+    "hash": "27ff107ed0754c9dd6f19dd5b16ee514"
+  },
+  "D:\\Project\\POS\\hermes_out.txt": {
+    "mtime": 1777885596.2293172,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "D:\\Project\\POS\\out.txt": {
+    "mtime": 1776700035.8201685,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "D:\\Project\\POS\\docs\\superpowers\\plans\\2026-05-08-root-gemini-setup.md": {
+    "mtime": 1778208086.8587816,
+    "hash": "ad3e979c5021acbf50f2c8b2b2f2fdc5"
+  },
+  "D:\\Project\\POS\\docs\\superpowers\\plans\\2026-05-08-specialize-backend-instructions.md": {
+    "mtime": 1778208366.9360006,
+    "hash": "b3b1c703759d4c344eb41862cb1fd231"
+  },
+  "D:\\Project\\POS\\POS_Project\\README.md": {
+    "mtime": 1776313553.0,
+    "hash": "fe0011ec9d57ecc0738fc471fcf42105"
+  },
+  "D:\\Project\\POS\\POS_Project\\backend\\GEMINI.md": {
+    "mtime": 1778208372.203031,
+    "hash": "de39db0f24923c35c2fed9cb3c7f433b"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\frontend_out.txt": {
+    "mtime": 1776746560.2709944,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\index.html": {
+    "mtime": 1777384891.1419191,
+    "hash": "46578e3a2458e668ad47023f91571aa6"
+  },
+  "D:\\Project\\POS\\login-after.png": {
+    "mtime": 1776917056.3380408,
+    "hash": "db5ecaa13b783d65c40d08b69412eb8e"
+  },
+  "D:\\Project\\POS\\login-initial.png": {
+    "mtime": 1776917054.4784844,
+    "hash": "6a4fbb8956dd337303f50fc2c6bf87ee"
+  },
+  "D:\\Project\\POS\\settings-pin-test.png": {
+    "mtime": 1776917070.0824711,
+    "hash": "4834d3e2d11c3d70bd37bd6c5096c665"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\public\\icons\\icon-192.png": {
+    "mtime": 1777455134.2363236,
+    "hash": "a58a7c0da111cffc3d55c750baff3140"
+  },
+  "D:\\Project\\POS\\POS_Project\\frontend\\public\\icons\\icon-512.png": {
+    "mtime": 1777455134.2363236,
+    "hash": "a51496018df5a671f9f66a689940101f"
+  }
+}

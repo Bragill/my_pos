@@ -35,6 +35,8 @@ export default function BarcodeScanner({ onDetected, onClose, isContinuous = fal
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
 
   const hasFiredRef = useRef(false);
+  const lastScannedCodeRef = useRef("");
+  const lastScanTimeRef = useRef(0);
 
   // ── Stop camera & reader ──
   const stopCamera = useCallback(() => {
@@ -67,7 +69,9 @@ export default function BarcodeScanner({ onDetected, onClose, isContinuous = fal
     stopCamera();
     setError(null);
     setLastScanned(null);
-    hasFiredRef.current = false; // Reset on start
+    hasFiredRef.current = false;
+    lastScannedCodeRef.current = "";
+    lastScanTimeRef.current = 0;
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("กรุณาเปิดผ่าน HTTPS เพื่อใช้งานกล้อง");
@@ -116,18 +120,32 @@ export default function BarcodeScanner({ onDetected, onClose, isContinuous = fal
       await reader.decodeFromConstraints(constraints, videoRef.current, (result, err) => {
         if (result && !hasFiredRef.current) {
           const text = result.getText();
+          const now = Date.now();
+          
+          // Logic: 
+          // 1. If it's the exact same code, wait at least 2 seconds (to prevent accidental double scans)
+          // 2. For any code, wait at least 500ms between scans (debounce)
+          const isSameCode = text === lastScannedCodeRef.current;
+          const timeSinceLastScan = now - lastScanTimeRef.current;
+          
+          if (isSameCode && timeSinceLastScan < 2000) return;
+          if (timeSinceLastScan < 500) return;
+
           hasFiredRef.current = true; // LOCK
+          lastScannedCodeRef.current = text;
+          lastScanTimeRef.current = now;
           
           setLastScanned(text);
           playBeep();
           onDetected(text);
           
           if (isContinuous) {
-            // In continuous mode, unlock after 1.5s to allow next scan
+            // In continuous mode, unlock after a short delay to allow NEXT different scan
+            // But we keep the lastScannedCodeRef to prevent RE-scanning the same one too quickly
             setTimeout(() => {
               hasFiredRef.current = false;
               setLastScanned(null);
-            }, 1500);
+            }, 1000);
           } else {
             // In one-shot mode, stop completely
             try { reader.reset(); } catch {}

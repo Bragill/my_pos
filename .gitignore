@@ -14,3 +14,15 @@ GitNexus/
 *.zip
 *.bat
 ngrok.exe
+.worktrees/
+.claude/
+.wrangler/
+*.db
+*.db.bak
+*.db-shm
+*.db-wal
+*.log
+.env
+.env.*
+!.env.example
+dev-dist/

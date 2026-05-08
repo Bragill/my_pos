@@ -6,8 +6,9 @@ import LoginPage from './pages/LoginPage';
 import POSPage from './pages/POSPage';
 import DashboardPage from './pages/DashboardPage';
 import ProductsPage from './pages/ProductsPage';
-import InventoryPage from './pages/InventoryPage';
-import CustomersPage from './pages/CustomersPage';
+import InventoryPage from "./pages/InventoryPage";
+import SalesHistoryPage from "./pages/SalesHistoryPage"; // Added
+import CustomersPage from "./pages/CustomersPage";
 import SettingsPage from './pages/SettingsPage';
 import OcrPage from './pages/OcrPage';
 import Layout from './components/Layout';
@@ -40,6 +41,9 @@ function App() {
               } />
               <Route path="inventory" element={
                 <ProtectedRoute roles={['admin', 'manager']}><InventoryPage /></ProtectedRoute>
+              } />
+              <Route path="sales" element={
+                <ProtectedRoute roles={['admin', 'manager', 'cashier']}><SalesHistoryPage /></ProtectedRoute>
               } />
               <Route path="ocr" element={
                 <ProtectedRoute roles={['admin', 'manager']}><OcrPage /></ProtectedRoute>

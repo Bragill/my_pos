@@ -561,7 +561,7 @@ export default function DashboardPage() {
                                   : <>
                                     {/* Sale Orders */}
                                     {(() => {
-                                      const orders = monthOrders[row.month] || [];
+                                      const orders = (monthOrders[row.month] || []).filter(o => o.status !== 'ยกเลิกแล้ว' && o.status !== 'refunded' && o.status !== 'parked' && o.status !== 'pending');
                                       const totalPages = Math.ceil(orders.length / PAGE);
                                       const paged = orders.slice((monthOrderPage-1)*PAGE, monthOrderPage*PAGE);
                                       return (
@@ -585,8 +585,8 @@ export default function DashboardPage() {
                                                         <div>
                                                           <div className="flex items-center gap-1.5">
                                                             <span className="text-xs font-mono font-semibold" style={{color:'#3300FC'}}>{order.order_no}</span>
-                                                            <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${order.status==='completed'?'bg-green-100 text-green-700':'bg-amber-100 text-amber-700'}`}>
-                                                              {order.status==='completed'?'ชำระแล้ว':'ค้างชำระ'}
+                                                            <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${order.status==='completed'?'bg-green-100 text-green-700':order.status==='outstanding'||order.status==='รอชำระพร้อมเพย์'?'bg-amber-100 text-amber-700':'bg-red-100 text-red-600'}`}>
+                                                              {order.status==='completed'?'ชำระแล้ว':order.status==='outstanding'||order.status==='รอชำระพร้อมเพย์'?'ค้างชำระ':'ยกเลิกแล้ว'}
                                                             </span>
                                                           </div>
                                                           <p className="text-xs text-gray-400">{order.created_at?.slice(0,16)} · {order.cashier_name}</p>
@@ -1001,11 +1001,14 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <div>
                 <h3 className="text-lg font-bold text-gray-800">📈 ยอดขายเดือนนี้</h3>
-                {monthData && (
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {monthData.length} บิล · รายได้ {formatCurrency(monthData.reduce((s,o) => s + o.total_amount, 0))}
-                  </p>
-                )}
+                {monthData && (() => {
+                  const active = monthData.filter(o => o.status !== 'cancelled' && o.status !== 'ยกเลิกแล้ว');
+                  return (
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {active.length} บิล · รายได้ {formatCurrency(active.reduce((s,o) => s + o.total_amount, 0))}
+                    </p>
+                  );
+                })()}
               </div>
               <button onClick={() => setMonthModal(false)}
                 className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-all">✕</button>
@@ -1020,11 +1023,15 @@ export default function DashboardPage() {
               ) : (
                 <>
                   {/* Summary row */}
+                  {(() => {
+                    const activeOrders = monthData.filter(o => o.status !== 'cancelled' && o.status !== 'ยกเลิกแล้ว');
+                    const activeTotal = activeOrders.reduce((s,o) => s + o.total_amount, 0);
+                    return (
                   <div className="grid grid-cols-3 gap-3 mb-5">
                     {[
-                      { label: 'รายได้รวม',   value: formatCurrency(monthData.reduce((s,o) => s + o.total_amount, 0)), color: '#3300FC' },
-                      { label: 'จำนวนบิล',   value: `${monthData.length} บิล`, color: '#95008A' },
-                      { label: 'เฉลี่ย/บิล',  value: formatCurrency(monthData.reduce((s,o) => s + o.total_amount, 0) / monthData.length), color: '#EB0000' },
+                      { label: 'รายได้รวม',   value: formatCurrency(activeTotal), color: '#3300FC' },
+                      { label: 'จำนวนบิล',   value: `${activeOrders.length} บิล`, color: '#95008A' },
+                      { label: 'เฉลี่ย/บิล',  value: formatCurrency(activeOrders.length > 0 ? activeTotal / activeOrders.length : 0), color: '#EB0000' },
                     ].map(c => (
                       <div key={c.label} className="rounded-2xl bg-gray-50 px-3 py-3 text-center">
                         <p className="text-xs text-gray-400 mb-1">{c.label}</p>
@@ -1032,6 +1039,8 @@ export default function DashboardPage() {
                       </div>
                     ))}
                   </div>
+                  );
+                  })()}
 
                   {/* Order list */}
                   {(() => {
