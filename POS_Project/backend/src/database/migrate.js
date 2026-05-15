@@ -9,7 +9,7 @@ async function migrate() {
   await db.run(`CREATE TABLE IF NOT EXISTS user_stores (user_id TEXT NOT NULL, store_id TEXT NOT NULL, is_active INTEGER DEFAULT 1, PRIMARY KEY (user_id, store_id))`);
   await db.run(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, pin_code TEXT, full_name TEXT NOT NULL, role_id TEXT NOT NULL, status TEXT DEFAULT 'active', created_at TEXT DEFAULT (datetime('now', '+7 hours')), updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
   await db.run(`CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT, sort_order INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now', '+7 hours')), updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
-  await db.run(`CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, sku TEXT NOT NULL, barcode TEXT, name TEXT NOT NULL, description TEXT, category_id TEXT, cost_price REAL NOT NULL DEFAULT 0, selling_price REAL NOT NULL DEFAULT 0, image_url TEXT, is_active INTEGER DEFAULT 1, is_featured INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now', '+7 hours')), updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
+  await db.run(`CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, sku TEXT NOT NULL, barcode TEXT, name TEXT NOT NULL, description TEXT, category_id TEXT, cost_price REAL NOT NULL DEFAULT 0, pending_cost_price REAL, selling_price REAL NOT NULL DEFAULT 0, image_url TEXT, is_active INTEGER DEFAULT 1, is_featured INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now', '+7 hours')), updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
   await db.run(`CREATE TABLE IF NOT EXISTS inventory (product_id TEXT PRIMARY KEY, store_id TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, reorder_level INTEGER NOT NULL DEFAULT 5, updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
   await db.run(`CREATE TABLE IF NOT EXISTS stock_transactions (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, product_id TEXT NOT NULL, user_id TEXT NOT NULL, type TEXT NOT NULL, quantity INTEGER NOT NULL, remark TEXT, created_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
   await db.run(`CREATE TABLE IF NOT EXISTS customers (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, member_code TEXT, name TEXT NOT NULL, phone TEXT, email TEXT, points INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now', '+7 hours')), updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
@@ -23,6 +23,7 @@ async function migrate() {
   try { await db.run("ALTER TABLE orders ADD COLUMN debtor_id TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE stores ADD COLUMN promptpay_number TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE stores ADD COLUMN promptpay_name TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE products ADD COLUMN pending_cost_price REAL"); } catch(e) {}
   
   console.log("Migration completed!");
 }

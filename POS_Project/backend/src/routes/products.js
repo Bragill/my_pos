@@ -3,6 +3,7 @@ const db = require("../database/dbHelper");
 const { authenticate, authorize } = require("../middleware/auth");
 const { AppError } = require("../middleware/errorHandler");
 const { v4: uuidv4 } = require("uuid");
+const { normalizeCost } = require("./_productCost");
 const router = express.Router();
 
 router.get("/deleted", authenticate, authorize("admin","manager"), async (req, res, next) => {
@@ -95,9 +96,33 @@ router.post("/", authenticate, authorize("admin","manager"), async (req, res, ne
 router.put("/:id", authenticate, authorize("admin","manager"), async (req, res, next) => {
   try {
     const { sku, barcode, name, description, category_id, cost_price, selling_price, image_url, is_active, is_featured } = req.body;
-    await db.run("UPDATE products SET sku=?,barcode=?,name=?,description=?,category_id=?,cost_price=?,selling_price=?,image_url=?,is_active=?,is_featured=?,updated_at=datetime('now', '+7 hours') WHERE id=? AND store_id=?", [sku, barcode, name, description, category_id, cost_price, selling_price, image_url, is_active?1:0, is_featured?1:0, req.params.id, req.store_id]);
-    const product = await db.get("SELECT * FROM products WHERE id=? AND store_id=?", [req.params.id, req.store_id]);
-    res.json({ success: true, data: product });
+    const [product, inventory] = await Promise.all([
+      db.get("SELECT cost_price,pending_cost_price FROM products WHERE id=? AND store_id=?", [req.params.id, req.store_id]),
+      db.get("SELECT quantity FROM inventory WHERE product_id=? AND store_id=?", [req.params.id, req.store_id])
+    ]);
+
+    if (!product) return next(new AppError("Product not found", 404));
+
+    const submittedCost = normalizeCost(cost_price);
+    const currentQty = inventory ? parseInt(inventory.quantity, 10) : 0;
+    let nextCostPrice = product.cost_price;
+    let nextPendingCostPrice = product.pending_cost_price;
+
+    if (submittedCost !== null) {
+      if (currentQty > 0) {
+        const currentCost = normalizeCost(product.cost_price);
+        if (submittedCost !== currentCost) {
+          nextPendingCostPrice = submittedCost;
+        }
+      } else {
+        nextCostPrice = submittedCost;
+        nextPendingCostPrice = null;
+      }
+    }
+
+    await db.run("UPDATE products SET sku=?,barcode=?,name=?,description=?,category_id=?,cost_price=?,pending_cost_price=?,selling_price=?,image_url=?,is_active=?,is_featured=?,updated_at=datetime('now', '+7 hours') WHERE id=? AND store_id=?", [sku, barcode, name, description, category_id, nextCostPrice, nextPendingCostPrice, selling_price, image_url, is_active?1:0, is_featured?1:0, req.params.id, req.store_id]);
+    const updatedProduct = await db.get("SELECT * FROM products WHERE id=? AND store_id=?", [req.params.id, req.store_id]);
+    res.json({ success: true, data: updatedProduct });
   } catch (err) { next(err); }
 });
 

@@ -44,6 +44,7 @@ CREATE TABLE products (
     category_id TEXT REFERENCES categories(id),
     store_id TEXT REFERENCES stores(id),
     cost_price REAL NOT NULL DEFAULT 0,
+    pending_cost_price REAL,
     selling_price REAL NOT NULL DEFAULT 0,
     image_url TEXT,
     is_active INTEGER DEFAULT 1, -- Boolean

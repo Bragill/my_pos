@@ -60,6 +60,7 @@ CREATE TABLE products (
     description TEXT,
     category_id UUID REFERENCES categories(id),
     cost_price NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    pending_cost_price NUMERIC(12, 2),
     selling_price NUMERIC(12, 2) NOT NULL DEFAULT 0,
     image_url TEXT,
     is_active BOOLEAN DEFAULT true,

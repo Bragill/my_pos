@@ -10,6 +10,8 @@ import { savePendingOrder, cacheProducts, getCachedProducts } from "../services/
 import toast from "react-hot-toast";
 import BarcodeScanner from "../components/BarcodeScanner";
 import ScanIcon from "../components/ScanIcon";
+import hardwareScanner from "../services/hardwareScannerService";
+import { printReceipt, connectUsb, connectBluetooth, isPrinterAvailable } from "../services/thermalPrinterService";
 
 const CartItem = ({ item, onUpdateQuantity, onRemove }) => {
   const [inputValue, setInputValue] = useState(item.quantity);
@@ -218,6 +220,75 @@ export default function POSPage() {
   const [ppConfirmModal, setPpConfirmModal] = useState(false);
   const invoiceRef = useRef(null);
 
+  const [printerConnected, setPrinterConnected] = useState(false);
+  const [printerTransport, setPrinterTransport] = useState(null);
+  const [lastOrderData, setLastOrderData] = useState(null);
+  const isAndroidPOS = hardwareScanner.isAvailable();
+
+  useEffect(() => {
+    if (!isAndroidPOS) return;
+    const onScan = (code) => {
+      const found = products.find((p) => p.barcode === code || p.sku === code);
+      if (found) {
+        addItem(found);
+        toast.success(`เพิ่ม "${found.name}" ลงตะกร้า`, { duration: 1500, position: 'top-center' });
+      } else {
+        toast(`ไม่พบสินค้า "${code}"`, { icon: '❌', duration: 2000, position: 'top-center' });
+      }
+    };
+    hardwareScanner.subscribe(onScan);
+    return () => hardwareScanner.unsubscribe(onScan);
+  }, [isAndroidPOS, products]);
+
+  const handleConnectUsb = async () => {
+    try {
+      await connectUsb();
+      setPrinterConnected(true);
+      setPrinterTransport('usb');
+      toast.success('เชื่อมต่อเครื่องพิมพ์ USB สำเร็จ');
+    } catch (err) {
+      toast.error(err.message || 'เชื่อมต่อ USB ล้มเหลว');
+    }
+  };
+
+  const handleConnectBluetooth = async () => {
+    try {
+      await connectBluetooth();
+      setPrinterConnected(true);
+      setPrinterTransport('bluetooth');
+      toast.success('เชื่อมต่อเครื่องพิมพ์ Bluetooth สำเร็จ');
+    } catch (err) {
+      toast.error(err.message || 'เชื่อมต่อ Bluetooth ล้มเหลว');
+    }
+  };
+
+  const handlePrintReceipt = async (orderData) => {
+    const source = orderData || lastOrderData;
+    if (!source) { toast.error('ไม่มีข้อมูลออเดอร์'); return; }
+    try {
+      const transport = await printReceipt({
+        storeName:    activeStore?.name,
+        storeAddress: activeStore?.address,
+        storePhone:   activeStore?.phone,
+        items:        source.items.map((i) => ({
+          name:       i.name || products.find((p) => p.id === i.product_id)?.name || '',
+          quantity:   i.quantity,
+          unit_price: i.unit_price,
+        })),
+        subTotal:      source.subTotal,
+        discount:      source.discount || 0,
+        tax:           source.tax,
+        total:         source.total,
+        cashReceived:  source.cashReceived,
+        paymentMethod: source.payment_method,
+        vatRate:       activeStore?.vat_rate ?? 7,
+      });
+      toast.success(`พิมพ์ใบเสร็จสำเร็จ (${transport})`);
+    } catch (err) {
+      toast.error(err.message || 'พิมพ์ไม่สำเร็จ');
+    }
+  };
+
   const handleDownloadStatement = async () => {
     // 1. Save order to DB with custom status
     const orderData = {
@@ -298,22 +369,30 @@ export default function POSPage() {
     const isOutstanding = paymentMethod === "outstanding";
     if (isOutstanding && !debtorId) { toast.error("กรุณาเลือกลูกหนี้"); return; }
     const orderData = {
-      items: cart.items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.selling_price, discount: i.discount || 0 })),
+      items: cart.items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.selling_price, discount: i.discount || 0, name: i.name })),
       customer_id: cart.customerId,
       payment_method: isOutstanding ? "outstanding" : paymentMethod,
       discount: cart.discount,
       is_outstanding: isOutstanding,
       debtor_id: isOutstanding ? debtorId : undefined,
       debtor_name: isOutstanding ? debtorName : undefined,
+      subTotal,
+      tax,
+      total,
+      cashReceived: paymentMethod === 'cash' ? parseFloat(cashReceived) : undefined,
     };
     try {
       if (navigator.onLine) {
         await api.post("/orders", orderData);
         toast.success(isOutstanding ? "บันทึกค้างชำระสำเร็จ!" : "ชำระเงินสำเร็จ!");
-        loadProducts(); // Refresh stock
+        loadProducts();
       } else {
         await savePendingOrder(orderData);
         toast.success("บันทึกออฟไลน์ - จะซิงค์เมื่อออนไลน์");
+      }
+      setLastOrderData(orderData);
+      if (!isOutstanding && isPrinterAvailable()) {
+        handlePrintReceipt(orderData);
       }
       clearCart();
       setPaymentModal(false);
@@ -682,6 +761,29 @@ export default function POSPage() {
                 </div>
               </div>
             )}
+            {/* Printer connect row — shown only when no native bridge detected */}
+            {!isPrinterAvailable() && (navigator.usb || navigator.bluetooth) && (
+              <div className="flex gap-2 mb-4">
+                {navigator.usb && (
+                  <button onClick={handleConnectUsb}
+                    className="flex-1 py-2 rounded-xl text-xs font-semibold border border-gray-200 bg-gray-50 hover:bg-gray-100 flex items-center justify-center gap-1 transition-all">
+                    🖨️ เชื่อม USB
+                  </button>
+                )}
+                {navigator.bluetooth && (
+                  <button onClick={handleConnectBluetooth}
+                    className="flex-1 py-2 rounded-xl text-xs font-semibold border border-gray-200 bg-gray-50 hover:bg-gray-100 flex items-center justify-center gap-1 transition-all">
+                    📡 เชื่อม Bluetooth
+                  </button>
+                )}
+              </div>
+            )}
+            {printerConnected && (
+              <p className="text-xs text-green-600 font-medium text-center mb-3">
+                ✅ เครื่องพิมพ์พร้อมใช้งาน ({printerTransport})
+              </p>
+            )}
+
             <div className="flex gap-3 mt-4">
               <button onClick={() => setPaymentModal(false)} className="btn-ghost flex-1">ยกเลิก</button>
               <button onClick={handlePayment}
@@ -691,9 +793,18 @@ export default function POSPage() {
                   (paymentMethod === 'qr_promptpay' && !activeStore?.promptpay_number)
                 }
                 className="btn-success flex-1 disabled:opacity-40">
-                {paymentMethod === 'outstanding' ? '📋 บันทึกค้างชำระ' : '✅ ยืนยันชำระเงิน'}
+                {paymentMethod === 'outstanding'
+                  ? '📋 บันทึกค้างชำระ'
+                  : isPrinterAvailable() ? '🖨️ ชำระและพิมพ์ใบเสร็จ' : '✅ ยืนยันชำระเงิน'}
               </button>
             </div>
+
+            {lastOrderData && !paymentModal && isPrinterAvailable() && (
+              <button onClick={() => handlePrintReceipt(null)}
+                className="w-full mt-2 py-2 rounded-xl text-xs font-semibold border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-all">
+                🖨️ พิมพ์ใบเสร็จซ้ำ
+              </button>
+            )}
           </div>
         </div>
       )}

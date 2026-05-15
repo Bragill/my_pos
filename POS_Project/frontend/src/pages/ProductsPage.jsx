@@ -190,7 +190,7 @@ export default function ProductsPage() {
     setForm({
       sku: product.sku, barcode: product.barcode || '', name: product.name,
       description: product.description || '', category_id: product.category_id || '',
-      cost_price: product.cost_price, selling_price: product.selling_price,
+      cost_price: product.pending_cost_price ?? product.cost_price, selling_price: product.selling_price,
       image_url: product.image_url || '', is_featured: product.is_featured,
       reorder_level: 5, is_active: product.is_active,
     });
@@ -241,6 +241,14 @@ export default function ProductsPage() {
     p.barcode?.includes(search)
   );
 
+  const editingCurrentCost = editingProduct ? Number(editingProduct.cost_price) || 0 : 0;
+  const editingPendingCost = editingProduct && editingProduct.pending_cost_price !== null && editingProduct.pending_cost_price !== undefined && editingProduct.pending_cost_price !== ''
+    ? Number(editingProduct.pending_cost_price)
+    : null;
+  const editingStock = editingProduct ? Number(editingProduct.stock_quantity) || 0 : 0;
+  const editingFormCost = form.cost_price === '' ? null : Number(form.cost_price);
+  const editingCostWillQueue = Boolean(editingProduct) && editingStock > 0 && editingFormCost !== null && !Number.isNaN(editingFormCost) && editingFormCost !== editingCurrentCost;
+
   return (
     <div className="p-6 overflow-y-auto h-[calc(100vh-56px)]">
       <div className="flex items-center justify-between mb-6">
@@ -287,7 +295,14 @@ export default function ProductsPage() {
                   {product.name}
                 </td>
                 <td className="py-2 px-2 text-gray-500">{product.category_name}</td>
-                <td className="py-2 px-2 text-right text-gray-500">{formatCurrency(product.cost_price)}</td>
+                <td className="py-2 px-2 text-right text-gray-500">
+                  <div className="flex flex-col items-end">
+                    <span>{formatCurrency(product.cost_price)}</span>
+                    {product.pending_cost_price !== null && product.pending_cost_price !== undefined && product.stock_quantity > 0 && (
+                      <span className="text-[10px] text-amber-600">Queued {formatCurrency(product.pending_cost_price)}</span>
+                    )}
+                  </div>
+                </td>
                 <td className="py-2 px-2 text-right font-semibold">{formatCurrency(product.selling_price)}</td>
                 <td className={`py-2 px-2 text-right font-semibold ${product.stock_quantity <= 5 ? 'text-red-500' : 'text-green-600'}`}>
                   {product.stock_quantity}
@@ -381,6 +396,14 @@ export default function ProductsPage() {
                       </>
                     )}
                   </div>
+                  {editingProduct && editingPendingCost !== null && editingStock > 0 && (
+                    <p className="mt-1 text-xs text-sky-600">
+                      Live cost is {formatCurrency(editingCurrentCost)}. Queued cost: {formatCurrency(editingPendingCost)} when stock = 0.
+                    </p>
+                  )}
+                  {editingCostWillQueue && (
+                    <p className="mt-1 text-xs text-amber-600">New cost stays queued until the current stock reaches 0.</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">ราคาขาย*</label>

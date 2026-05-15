@@ -180,12 +180,13 @@ export default function InventoryPage() {
   const openReceive = useCallback((item) => {
     isProcessingRef.current = true; // Lock scanning
     setReceiveModal(item);
-    setForm({ 
-      quantity: "", 
-      remark: "", 
+    setForm({
+      quantity: "",
+      remark: "",
       received_date: today(),
       payment_method: "cash",
-      bank_name: "" 
+      bank_name: "",
+      new_cost_price: ""
     });
   }, []);
 
@@ -284,7 +285,8 @@ export default function InventoryPage() {
         remark: form.remark || "รับเข้าสต๊อก",
         received_date: form.received_date,
         payment_method: form.payment_method,
-        bank_name: form.payment_method === "credit_card" ? form.bank_name : undefined
+        bank_name: form.payment_method === "credit_card" ? form.bank_name : undefined,
+        new_cost_price: hasNextReceiveCost ? nextReceiveCost : undefined
       });
       toast.success(`รับสินค้า "${receiveModal.name}" เข้า ${qty} ชิ้น สำเร็จ`);
       closeModals();
@@ -301,7 +303,7 @@ export default function InventoryPage() {
       toast.success('เพิ่มสินค้าใหม่สำเร็จ');
       loadInventory();
       // Keep processing flag true and transition to receive modal
-      setReceiveModal(res.data.data);
+      setReceiveModal({ ...res.data.data, quantity: 0, pending_cost_price: null });
       setShowProductForm(false);
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'เกิดข้อผิดพลาด');
@@ -317,6 +319,17 @@ export default function InventoryPage() {
   );
 
   const lowCount = inventory.filter(i => i.quantity <= i.reorder_level).length;
+  const currentReceiveCost = receiveModal ? Number(receiveModal.cost_price) || 0 : 0;
+  const pendingReceiveCost = receiveModal && receiveModal.pending_cost_price !== null && receiveModal.pending_cost_price !== undefined && receiveModal.pending_cost_price !== ""
+    ? Number(receiveModal.pending_cost_price)
+    : null;
+  const nextReceiveCostInput = form.new_cost_price ?? "";
+  const nextReceiveCost = nextReceiveCostInput === "" ? null : Number(nextReceiveCostInput);
+  const hasNextReceiveCost = nextReceiveCost !== null && !Number.isNaN(nextReceiveCost);
+  const receiveCostWillChange = hasNextReceiveCost && nextReceiveCost !== currentReceiveCost;
+  const previewReceiveUnitCost = receiveModal && receiveModal.quantity <= 0 && hasNextReceiveCost
+    ? nextReceiveCost
+    : currentReceiveCost;
 
   return (
     <div className="p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)]">
@@ -374,7 +387,14 @@ export default function InventoryPage() {
                   <td className="py-2.5 pr-3 text-gray-500 font-mono text-xs">{item.sku}</td>
                   <td className="py-2.5 pr-3 font-medium text-gray-800">{item.name}</td>
                   <td className="py-2.5 pr-3 text-gray-400 text-xs hidden md:table-cell">{item.category_name}</td>
-                  <td className="py-2.5 pr-3 text-right text-gray-500 hidden md:table-cell">{formatCurrency(item.cost_price)}</td>
+                  <td className="py-2.5 pr-3 text-right text-gray-500 hidden md:table-cell">
+                    <div className="flex flex-col items-end">
+                      <span>{formatCurrency(item.cost_price)}</span>
+                      {item.pending_cost_price !== null && item.pending_cost_price !== undefined && item.quantity > 0 && (
+                        <span className="text-[10px] text-amber-600">Queued {formatCurrency(item.pending_cost_price)}</span>
+                      )}
+                    </div>
+                  </td>
                   <td className="py-2.5 pr-3 text-right">
                     <span className={"font-bold " + (low ? "text-red-600" : "text-green-600")}>
                       {item.quantity}
@@ -489,12 +509,47 @@ export default function InventoryPage() {
                 </div>
               )}
 
+              {/* New cost price */}
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1">
+                  ต้นทุน/ชิ้น
+                  <span className="ml-1 text-xs text-gray-400">(ปัจจุบัน {formatCurrency(receiveModal.cost_price)})</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.new_cost_price}
+                  onChange={e => setForm({ ...form, new_cost_price: e.target.value })}
+                  className="input-field"
+                  placeholder={`${receiveModal.cost_price} (ไม่เปลี่ยนถ้าว่าง)`}
+                />
+                {pendingReceiveCost !== null && receiveModal.quantity > 0 && (
+                  <p className="text-xs mt-1 text-sky-600">
+                    Locked at {formatCurrency(currentReceiveCost)}. Next cost queued: {formatCurrency(pendingReceiveCost)} when stock = 0.
+                  </p>
+                )}
+                {receiveCostWillChange && (
+                  <p className="text-xs mt-1 text-amber-600">
+                    {receiveModal.quantity > 0
+                      ? "⏳ ต้นทุนใหม่จะใช้เมื่อสินค้าเก่าหมด (stock = 0)"
+                      : "✅ ต้นทุนใหม่จะใช้ทันที (stock ปัจจุบัน = 0)"}
+                  </p>
+                )}
+              </div>
+
               {/* Cost preview */}
               {form.quantity > 0 && (
                 <div className="bg-purple-50 rounded-2xl px-4 py-3 flex justify-between items-center">
-                  <span className="text-sm text-gray-600">ต้นทุนรวม ({form.quantity} × {formatCurrency(receiveModal.cost_price)})</span>
+                  <span className="text-sm text-gray-600">
+                    ต้นทุนรวม ({form.quantity} × {formatCurrency(
+                      previewReceiveUnitCost
+                    )})
+                  </span>
                   <span className="font-bold text-purple-700">
-                    {formatCurrency(parseInt(form.quantity || 0) * receiveModal.cost_price)}
+                    {formatCurrency(parseInt(form.quantity || 0) * (
+                      previewReceiveUnitCost
+                    ))}
                   </span>
                 </div>
               )}

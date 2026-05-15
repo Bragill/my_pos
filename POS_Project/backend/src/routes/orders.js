@@ -3,6 +3,7 @@ const db = require("../database/dbHelper");
 const { authenticate, authorize } = require("../middleware/auth");
 const { AppError } = require("../middleware/errorHandler");
 const { v4: uuidv4 } = require("uuid");
+const { applyPendingCostIfInventoryEmpty } = require("./_productCost");
 const router = express.Router();
 
 router.post("/", authenticate, async (req, res, next) => {
@@ -78,6 +79,8 @@ router.post("/", authenticate, async (req, res, next) => {
       await db.run("INSERT INTO order_items (id,order_id,product_id,quantity,unit_price,discount,total_price) VALUES (?,?,?,?,?,?,?)", [uuidv4(), orderId, item.product_id, item.quantity, item.unit_price, item.discount, item.total_price]);
       await db.run("UPDATE inventory SET quantity=quantity-?,updated_at=datetime('now', '+7 hours') WHERE product_id=? AND store_id=?", [item.quantity, item.product_id, req.store_id]);
       await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id) VALUES (?,?,?,'sale',?,?,?)", [uuidv4(), item.product_id, req.user.id, -item.quantity, (is_outstanding ? "Outstanding - " : "Sale - ") + orderNo, req.store_id]);
+      const invAfter = await db.get("SELECT quantity FROM inventory WHERE product_id=? AND store_id=?", [item.product_id, req.store_id]);
+      await applyPendingCostIfInventoryEmpty(item.product_id, req.store_id, invAfter ? invAfter.quantity : 0);
     }
     
     if (!is_outstanding) {
