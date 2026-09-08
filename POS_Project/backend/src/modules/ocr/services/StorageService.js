@@ -16,22 +16,40 @@ class StorageService {
         this.bucket = process.env.R2_BUCKET_NAME;
     }
 
-    async uploadImage(buffer, mimetype) {
-        // Image is already optimized in OcrService before calling this
-        const key = `receipts/${uuidv4()}.jpeg`;
+    async uploadImage(buffer, mimetype = 'image/jpeg') {
+        const fs = require('fs');
+        const path = require('path');
+        const filename = `${uuidv4()}.jpeg`;
+        const key = `receipts/${filename}`;
 
-        const command = new PutObjectCommand({
-            Bucket: this.bucket,
-            Key: key,
-            Body: buffer,
-            ContentType: mimetype,
-        });
+        if (process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_BUCKET_NAME) {
+            try {
+                const command = new PutObjectCommand({
+                    Bucket: this.bucket,
+                    Key: key,
+                    Body: buffer,
+                    ContentType: mimetype,
+                });
+                await this.client.send(command);
+                const domain = process.env.R2_PUBLIC_DOMAIN || '';
+                const url = domain ? `${domain}/${key}` : `/${key}`;
+                return { key, url };
+            } catch (error) {
+                console.error('Cloudflare R2 upload error, storing locally fallback:', error.message);
+            }
+        }
 
-        await this.client.send(command);
-        
+        // Local fallback
+        const uploadDir = path.join(__dirname, '../../../../uploads/receipts');
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        const localPath = path.join(uploadDir, filename);
+        fs.writeFileSync(localPath, buffer);
+
         return {
             key,
-            url: `${process.env.R2_PUBLIC_DOMAIN}/${key}`
+            url: `/uploads/receipts/${filename}`
         };
     }
 

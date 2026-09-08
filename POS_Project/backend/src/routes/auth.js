@@ -37,14 +37,17 @@ router.post("/login", async (req, res, next) => {
       stores = await db.all("SELECT s.id, s.name FROM stores s JOIN user_stores us ON s.id = us.store_id WHERE us.user_id = ? AND us.is_active = 1 AND s.is_active = 1", [user.id]);
     }
 
+    let parsedPerms = {};
+    try { parsedPerms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : (user.permissions || {}); } catch(e) {}
+
     const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role_name, permissions: JSON.parse(user.permissions) }, 
+      { id: user.id, username: user.username, role: user.role_name, permissions: parsedPerms }, 
       DEFAULT_SECRET, 
       { expiresIn: process.env.JWT_EXPIRES_IN || "8h" }
     );
 
     console.log(`Login successful for ${user.username}, stores count: ${stores.length}`);
-    res.json({ success: true, data: { token, user: { id: user.id, username: user.username, fullName: user.full_name, role: user.role_name }, stores } });
+    res.json({ success: true, data: { token, user: { id: user.id, username: user.username, fullName: user.full_name, role: user.role_name, permissions: parsedPerms }, stores } });
   } catch (err) { 
     console.error("Detailed Login Error:", err);
     next(err); 
@@ -80,14 +83,17 @@ router.post("/pin-login", async (req, res, next) => {
       stores = await db.all("SELECT s.id, s.name FROM stores s JOIN user_stores us ON s.id = us.store_id WHERE us.user_id = ? AND us.is_active = 1 AND s.is_active = 1", [matchedUser.id]);
     }
 
+    let parsedPerms = {};
+    try { parsedPerms = typeof matchedUser.permissions === 'string' ? JSON.parse(matchedUser.permissions) : (matchedUser.permissions || {}); } catch(e) {}
+
     const token = jwt.sign(
-      { id: matchedUser.id, username: matchedUser.username, role: matchedUser.role_name, permissions: JSON.parse(matchedUser.permissions) }, 
+      { id: matchedUser.id, username: matchedUser.username, role: matchedUser.role_name, permissions: parsedPerms }, 
       DEFAULT_SECRET, 
       { expiresIn: process.env.JWT_EXPIRES_IN || "8h" }
     );
 
     console.log(`PIN Login successful for ${matchedUser.username}, stores count: ${stores.length}`);
-    res.json({ success: true, data: { token, user: { id: matchedUser.id, username: matchedUser.username, fullName: matchedUser.full_name, role: matchedUser.role_name }, stores } });
+    res.json({ success: true, data: { token, user: { id: matchedUser.id, username: matchedUser.username, fullName: matchedUser.full_name, role: matchedUser.role_name, permissions: parsedPerms }, stores } });
   } catch (err) { 
     console.error("Detailed PIN Login Error:", err);
     next(err); 
@@ -96,8 +102,11 @@ router.post("/pin-login", async (req, res, next) => {
 
 router.get("/me", authenticate, async (req, res, next) => {
   try {
-    const user = await db.get("SELECT u.id, u.username, u.full_name, r.name as role_name FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = ?", [req.user.id]);
-    res.json({ success: true, data: user });
+    const user = await db.get("SELECT u.id, u.username, u.full_name as fullName, r.name as role, r.permissions FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = ?", [req.user.id]);
+    if (!user) return next(new AppError("ไม่พบข้อมูลผู้ใช้", 404));
+    let parsedPerms = {};
+    try { parsedPerms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : (user.permissions || {}); } catch(e) {}
+    res.json({ success: true, data: { ...user, permissions: parsedPerms } });
   } catch (err) { next(err); }
 });
 

@@ -80,7 +80,37 @@ router.post("/", authenticate, async (req, res, next) => {
       await db.run("UPDATE inventory SET quantity=quantity-?,updated_at=datetime('now', '+7 hours') WHERE product_id=? AND store_id=?", [item.quantity, item.product_id, req.store_id]);
       await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id) VALUES (?,?,?,'sale',?,?,?)", [uuidv4(), item.product_id, req.user.id, -item.quantity, (is_outstanding ? "Outstanding - " : "Sale - ") + orderNo, req.store_id]);
       const invAfter = await db.get("SELECT quantity FROM inventory WHERE product_id=? AND store_id=?", [item.product_id, req.store_id]);
-      await applyPendingCostIfInventoryEmpty(item.product_id, req.store_id, invAfter ? invAfter.quantity : 0);
+      await applyPendingCostIfInventoryEmpty(item.product_id, req.store_id, invAfter ? invAfter.quantity : 0, req.user.id);
+
+function getUnitFactor(unitStr) {
+  if (!unitStr) return 1;
+  const u = String(unitStr).trim().toLowerCase();
+  if (['kg', 'กิโลกรัม', 'กก', 'ก.ก.', 'กิโล'].includes(u)) return 1000;
+  if (['g', 'กรัม', 'ก.'].includes(u)) return 1;
+  if (['ml', 'มิลลิลิตร', 'มล.', 'มล'].includes(u)) return 1;
+  if (['l', 'ลิตร'].includes(u)) return 1000;
+  if (['oz', 'ออนซ์'].includes(u)) return 28.3495;
+  return 1;
+}
+
+      // Deduct recipe ingredients stock if product has a recipe
+      const recipeItems = await db.all("SELECT ingredient_id, quantity, unit FROM recipes WHERE product_id=? AND (store_id=? OR store_id IS NULL OR store_id='store-1')", [item.product_id, req.store_id]);
+      for (const rItem of recipeItems) {
+        const ing = await db.get("SELECT unit FROM ingredients WHERE id=?", [rItem.ingredient_id]);
+        let multiplier = 1;
+        if (ing && ing.unit) {
+          const rFactor = getUnitFactor(rItem.unit);
+          const iFactor = getUnitFactor(ing.unit);
+          if (rFactor > 0 && iFactor > 0 && rFactor !== iFactor) {
+            multiplier = rFactor / iFactor;
+          }
+        }
+        const deductQty = rItem.quantity * multiplier * item.quantity;
+        await db.run("UPDATE ingredients SET quantity=quantity-?, updated_at=datetime('now', '+7 hours') WHERE id=?", [deductQty, rItem.ingredient_id]);
+        await db.run("UPDATE inventory SET quantity=quantity-?, updated_at=datetime('now', '+7 hours') WHERE product_id=?", [deductQty, rItem.ingredient_id]);
+        await db.run("INSERT INTO ingredient_stock_transactions (id,ingredient_id,user_id,store_id,type,quantity,remark) VALUES (?,?,?,?,'sale',?,?)",
+          [uuidv4(), rItem.ingredient_id, req.user.id, req.store_id, -deductQty, `Sale (${orderNo}) - ${item.quantity}x`]);
+      }
     }
     
     if (!is_outstanding) {
@@ -142,7 +172,6 @@ router.post("/pay-partial", authenticate, async (req, res, next) => {
     for (const o of orders) {
       if (remaining <= 0) break;
       
-      // Calculate how much is already paid for this order
       const paidResult = await db.get("SELECT COALESCE(SUM(amount), 0) as total_paid FROM payments WHERE order_id = ?", [o.id]);
       const alreadyPaid = paidResult?.total_paid || 0;
       const balance = o.total_amount - alreadyPaid;
@@ -150,13 +179,11 @@ router.post("/pay-partial", authenticate, async (req, res, next) => {
       if (balance <= 0) continue;
 
       if (remaining >= balance) {
-        // This payment covers the full remaining balance of this order
         await db.run("UPDATE orders SET status='completed', payment_method=?, updated_at=datetime('now', '+7 hours') WHERE id=? AND store_id=?", [payment_method, o.id, req.store_id]);
         await db.run("INSERT INTO payments (id,order_id,payment_type,amount) VALUES (?,?,?,?)", [uuidv4(), o.id, payment_method, balance]);
         remaining -= balance;
         paid.push({ order_no: o.order_no, paid: balance, status: 'completed' });
       } else {
-        // Partial on this order — record payment but order stays outstanding
         await db.run("INSERT INTO payments (id,order_id,payment_type,amount) VALUES (?,?,?,?)", [uuidv4(), o.id, payment_method, remaining]);
         paid.push({ order_no: o.order_no, paid: remaining, status: 'partial' });
         remaining = 0;
@@ -190,6 +217,15 @@ router.post("/:id/refund", authenticate, authorize("admin","manager"), async (re
     for (const item of items) {
       await db.run("UPDATE inventory SET quantity=quantity+?,updated_at=datetime('now', '+7 hours') WHERE product_id=? AND store_id=?", [item.quantity, item.product_id, req.store_id]);
       await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id) VALUES (?,?,?,'return',?,?,?)", [uuidv4(), item.product_id, req.user.id, item.quantity, "Refund - " + order.order_no, req.store_id]);
+
+      // Restore recipe ingredients stock
+      const recipeItems = await db.all("SELECT ingredient_id, quantity FROM recipes WHERE product_id=? AND store_id=?", [item.product_id, req.store_id]);
+      for (const rItem of recipeItems) {
+        const restoreQty = rItem.quantity * item.quantity;
+        await db.run("UPDATE ingredients SET quantity=quantity+?, updated_at=datetime('now', '+7 hours') WHERE id=? AND store_id=?", [restoreQty, rItem.ingredient_id, req.store_id]);
+        await db.run("INSERT INTO ingredient_stock_transactions (id,ingredient_id,user_id,store_id,type,quantity,remark) VALUES (?,?,?,?,'return',?,?)",
+          [uuidv4(), rItem.ingredient_id, req.user.id, req.store_id, restoreQty, `Refund (${order.order_no})`]);
+      }
     }
     await db.run("UPDATE orders SET status='refunded',updated_at=datetime('now', '+7 hours') WHERE id=? AND store_id=?", [req.params.id, req.store_id]);
     res.json({ success: true, message: "Refund successful" });
@@ -221,6 +257,15 @@ router.delete("/:id", authenticate, authorize("admin", "manager"), async (req, r
     for (const item of items) {
       await db.run("UPDATE inventory SET quantity=quantity+?,updated_at=datetime('now', '+7 hours') WHERE product_id=? AND store_id=?", [item.quantity, item.product_id, req.store_id]);
       await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id) VALUES (?,?,?,'return',?,?,?)", [uuidv4(), item.product_id, req.user.id, item.quantity, "Void - " + order.order_no, req.store_id]);
+
+      // Restore recipe ingredients stock
+      const recipeItems = await db.all("SELECT ingredient_id, quantity FROM recipes WHERE product_id=? AND store_id=?", [item.product_id, req.store_id]);
+      for (const rItem of recipeItems) {
+        const restoreQty = rItem.quantity * item.quantity;
+        await db.run("UPDATE ingredients SET quantity=quantity+?, updated_at=datetime('now', '+7 hours') WHERE id=? AND store_id=?", [restoreQty, rItem.ingredient_id, req.store_id]);
+        await db.run("INSERT INTO ingredient_stock_transactions (id,ingredient_id,user_id,store_id,type,quantity,remark) VALUES (?,?,?,?,'return',?,?)",
+          [uuidv4(), rItem.ingredient_id, req.user.id, req.store_id, restoreQty, `Void (${order.order_no})`]);
+      }
     }
     await db.run("DELETE FROM order_items WHERE order_id=?", [req.params.id]);
     await db.run("DELETE FROM payments WHERE order_id=?", [req.params.id]);

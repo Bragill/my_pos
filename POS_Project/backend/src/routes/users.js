@@ -44,8 +44,138 @@ router.get("/", authenticate, authorize("admin"), async (req, res, next) => {
 // GET all roles
 router.get("/roles", authenticate, authorize("admin"), async (req, res, next) => {
   try {
-    const roles = await db.all("SELECT id, name FROM roles ORDER BY name");
-    res.json({ success: true, data: roles });
+    let roles = [];
+    try {
+      roles = await db.all(`
+        SELECT r.id, r.name, r.permissions, r.description, r.created_at,
+               COUNT(u.id) as user_count
+        FROM roles r
+        LEFT JOIN users u ON r.id = u.role_id
+        GROUP BY r.id, r.name, r.permissions, r.description, r.created_at
+        ORDER BY r.created_at ASC
+      `);
+    } catch (err) {
+      console.warn("Retrying GET /roles with schema fix:", err.message);
+      try {
+        await db.run("ALTER TABLE roles ADD COLUMN description TEXT");
+        roles = await db.all(`
+          SELECT r.id, r.name, r.permissions, r.description, r.created_at,
+                 COUNT(u.id) as user_count
+          FROM roles r
+          LEFT JOIN users u ON r.id = u.role_id
+          GROUP BY r.id, r.name, r.permissions, r.description, r.created_at
+          ORDER BY r.created_at ASC
+        `);
+      } catch (err2) {
+        roles = await db.all(`
+          SELECT r.id, r.name, r.permissions, '' as description, r.created_at,
+                 COUNT(u.id) as user_count
+          FROM roles r
+          LEFT JOIN users u ON r.id = u.role_id
+          GROUP BY r.id, r.name, r.permissions, r.created_at
+          ORDER BY r.created_at ASC
+        `);
+      }
+    }
+    
+    const formattedRoles = roles.map(r => {
+      let perms = {};
+      try { perms = typeof r.permissions === 'string' ? JSON.parse(r.permissions) : (r.permissions || {}); } catch(e) {}
+      return {
+        ...r,
+        description: r.description || '',
+        permissions: perms,
+        user_count: Number(r.user_count || 0)
+      };
+    });
+
+    res.json({ success: true, data: formattedRoles });
+  } catch (err) { next(err); }
+});
+
+// CREATE role
+router.post("/roles", authenticate, authorize("admin"), async (req, res, next) => {
+  try {
+    const { name, description, permissions } = req.body;
+    if (!name || !name.trim()) return next(new AppError("กรุณาระบุชื่อบทบาท", 400));
+    
+    const trimmedName = name.trim();
+    const existing = await db.get("SELECT id FROM roles WHERE LOWER(name) = LOWER(?)", [trimmedName]);
+    if (existing) return next(new AppError(`บทบาท "${trimmedName}" มีอยู่ในระบบแล้ว`, 400));
+
+    const id = uuidv4();
+    const permString = typeof permissions === 'object' ? JSON.stringify(permissions) : (permissions || '{}');
+    
+    try {
+      await db.run(
+        "INSERT INTO roles (id, name, description, permissions) VALUES (?,?,?,?)",
+        [id, trimmedName, description || null, permString]
+      );
+    } catch (insertErr) {
+      if (insertErr.message && insertErr.message.includes('description')) {
+        try { await db.run("ALTER TABLE roles ADD COLUMN description TEXT"); } catch(e) {}
+        await db.run(
+          "INSERT INTO roles (id, name, description, permissions) VALUES (?,?,?,?)",
+          [id, trimmedName, description || null, permString]
+        );
+      } else {
+        throw insertErr;
+      }
+    }
+
+    const created = await db.get("SELECT * FROM roles WHERE id = ?", [id]);
+    let perms = {};
+    try { perms = JSON.parse(created.permissions); } catch(e) {}
+    res.status(201).json({ success: true, data: { ...created, description: created.description || '', permissions: perms, user_count: 0 } });
+  } catch (err) { next(err); }
+});
+
+// UPDATE role
+router.put("/roles/:id", authenticate, authorize("admin"), async (req, res, next) => {
+  try {
+    const { name, description, permissions } = req.body;
+    const role = await db.get("SELECT * FROM roles WHERE id = ?", [req.params.id]);
+    if (!role) return next(new AppError("ไม่พบบทบาทที่ต้องการแก้ไข", 404));
+
+    const isSystemAdmin = role.name === 'admin';
+    const newName = isSystemAdmin ? 'admin' : (name ? name.trim() : role.name);
+    
+    if (!isSystemAdmin && newName.toLowerCase() !== role.name.toLowerCase()) {
+      const existing = await db.get("SELECT id FROM roles WHERE LOWER(name) = LOWER(?) AND id != ?", [newName, req.params.id]);
+      if (existing) return next(new AppError("ชื่อบทบาทนี้มีอยู่ในระบบแล้ว", 400));
+    }
+
+    const permString = typeof permissions === 'object' ? JSON.stringify(permissions) : (permissions || '{}');
+    await db.run(
+      "UPDATE roles SET name=?, description=?, permissions=?, updated_at=datetime('now', '+7 hours') WHERE id=?",
+      [newName, description || null, permString, req.params.id]
+    );
+
+    const updated = await db.get("SELECT * FROM roles WHERE id = ?", [req.params.id]);
+    const userCountRes = await db.get("SELECT COUNT(id) as count FROM users WHERE role_id = ?", [req.params.id]);
+    let perms = {};
+    try { perms = JSON.parse(updated.permissions); } catch(e) {}
+    res.json({ success: true, data: { ...updated, permissions: perms, user_count: Number(userCountRes?.count || 0) } });
+  } catch (err) { next(err); }
+});
+
+// DELETE role
+router.delete("/roles/:id", authenticate, authorize("admin"), async (req, res, next) => {
+  try {
+    const role = await db.get("SELECT * FROM roles WHERE id = ?", [req.params.id]);
+    if (!role) return next(new AppError("ไม่พบบทบาทที่ต้องการลบ", 404));
+
+    if (role.name === 'admin') {
+      return next(new AppError("ไม่สามารถลบบทบาทผู้ดูแลระบบสูงสุด (admin) ได้", 400));
+    }
+
+    const usersAssigned = await db.get("SELECT COUNT(id) as count FROM users WHERE role_id = ?", [req.params.id]);
+    if (usersAssigned && usersAssigned.count > 0) {
+      return next(new AppError(`ไม่สามารถลบบทบาทนี้ได้ เนื่องจากมีผู้ใช้งานใช้บทบาทนี้อยู่ ${usersAssigned.count} คน`, 400));
+    }
+
+    await db.run("DELETE FROM roles WHERE id = ?", [req.params.id]);
+    res.json({ success: true, message: "ลบบทบาทสำเร็จ" });
   } catch (err) { next(err); }
 });
 

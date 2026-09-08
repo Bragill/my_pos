@@ -29,4 +29,24 @@ api.interceptors.response.use(
   }
 );
 
+// Ingredient API methods
+export const ingredientsAPI = {
+  getAll: (search) => api.get('/ingredients', { params: { search } }),
+  getById: (id) => api.get(`/ingredients/${id}`),
+  create: (data) => api.post('/ingredients', data),
+  update: (id, data) => api.put(`/ingredients/${id}`, data),
+  adjustStock: (id, data) => api.post(`/ingredients/${id}/adjust`, data),
+  delete: (id) => api.delete(`/ingredients/${id}`),
+};
+
+// Recipe API methods
+export const recipesAPI = {
+  getByProduct: (productId) => api.get(`/recipes/product/${productId}`),
+  saveRecipe: (productId, data) => api.post(`/recipes/product/${productId}`, data),
+  deleteRecipe: (productId) => api.delete(`/recipes/product/${productId}`),
+  getSummary: () => api.get('/recipes/summary'),
+  createMasterRecipe: (data) => api.post('/recipes/master', data),
+  deleteMasterRecipe: (id) => api.delete(`/recipes/master/${id}`),
+};
+
 export default api;

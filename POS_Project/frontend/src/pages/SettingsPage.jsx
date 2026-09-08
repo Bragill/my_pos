@@ -2,9 +2,254 @@ import { useState, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { canViewModule, canMaintainModule } from '../utils/permissions';
 
 const ROLE_LABELS = { admin: '👑 แอดมิน', manager: '📊 ผู้จัดการ', cashier: '🛒 แคชเชียร์' };
-const EMPTY_USER = { username: '', password: '', full_name: '', pin_code: '', role_id: '', status: 'active' };
+
+const MODULE_PERMISSIONS = [
+  { key: 'pos', label: '🛒 การขาย POS', desc: 'เข้าใช้งานระบบบันทึกขายหน้าร้าน' },
+  { key: 'sales', label: '📜 ประวัติการขาย', desc: 'ค้นหา ตรวจสอบ และออกใบเสร็จย้อนหลัง' },
+  { key: 'dashboard', label: '📊 แดชบอร์ด & รายงาน', desc: 'ดูสถิติยอดขาย สินค้าขายดี และรายงานการเงิน' },
+  { key: 'products', label: '📦 รายการสินค้า & ราคา', desc: 'สร้าง แก้ไข ตั้งราคา และจัดการหมวดหมู่สินค้า' },
+  { key: 'inventory', label: '🏪 คลังสินค้า & สต๊อก', desc: 'รับสินค้าเข้า ปรับสต๊อก และตรวจเช็คสต๊อกคงเหลือ' },
+  { key: 'recipes', label: '🧪 สูตรอาหาร & วัตถุดิบ', desc: 'ตั้งค่าสูตรอาหาร การตัดสต๊อก และแปลงหน่วย' },
+  { key: 'ocr', label: '🧾 สแกนใบเสร็จ OCR', desc: 'อัปโหลดใบเสร็จเพื่อตรวจจับสินค้าเข้าคลังอัตโนมัติ' },
+  { key: 'customers', label: '📋 จัดการลูกค้า & ลูกหนี้', desc: 'จัดการสมาชิก สะสมแต้ม และบันทึกขายเชื่อ/ลูกหนี้' },
+  { key: 'settings', label: '⚙️ ตั้งค่าระบบ & สาขา', desc: 'จัดการสาขา ผู้ใช้งาน หมวดหมู่ และสิทธิ์การใช้งาน' },
+];
+
+const SYSTEM_UNITS = [
+  { value: 'ชิ้น', label: 'ชิ้น (pcs)', desc: 'หน่วยนับหลักนับจำนวน' },
+  { value: 'g', label: 'กรัม (g)', desc: 'หน่วยน้ำหนักย่อย' },
+  { value: 'kg', label: 'กิโลกรัม (kg)', desc: 'หน่วยน้ำหนักหลัก' },
+  { value: 'ml', label: 'มิลลิลิตร (ml)', desc: 'หน่วยปริมาตรย่อย' },
+  { value: 'L', label: 'ลิตร (L)', desc: 'หน่วยปริมาตรหลัก' },
+  { value: 'oz', label: 'ออนซ์ (oz)', desc: 'หน่วยปริมาตร/น้ำหนัก' },
+  { value: 'ถุง', label: 'ถุง (bag)', desc: 'บรรจุภัณฑ์ถุง' },
+  { value: 'ขวด', label: 'ขวด (bottle)', desc: 'บรรจุภัณฑ์ขวด' },
+  { value: 'กล่อง', label: 'กล่อง (box)', desc: 'บรรจุภัณฑ์กล่อง' },
+  { value: 'แพ็ค', label: 'แพ็ค (pack)', desc: 'บรรจุภัณฑ์แพ็ค' },
+  { value: 'แก้ว', label: 'แก้ว (cup)', desc: 'หน่วยเครื่องดื่ม' },
+  { value: 'กระป๋อง', label: 'กระป๋อง (can)', desc: 'บรรจุภัณฑ์กระป๋อง' },
+  { value: 'แผ่น', label: 'แผ่น (sheet)', desc: 'หน่วยนับแผ่น' },
+  { value: 'ชุด', label: 'ชุด (set)', desc: 'หน่วยนับเซต/ชุด' },
+];
+
+function RoleModal({ role, onClose, onSaved }) {
+  const isEdit = !!role?.id;
+  const isSystemAdmin = role?.name === 'admin';
+  const [name, setName] = useState(role?.name || '');
+  const [description, setDescription] = useState(role?.description || '');
+  const [permissions, setPermissions] = useState(role?.permissions || {
+    pos: { view: true, maintain: true },
+    sales: { view: false, maintain: false },
+    dashboard: { view: false, maintain: false },
+    products: { view: false, maintain: false },
+    inventory: { view: false, maintain: false },
+    recipes: { view: false, maintain: false },
+    ocr: { view: false, maintain: false },
+    customers: { view: true, maintain: true },
+    settings: { view: false, maintain: false }
+  });
+  const [saving, setSaving] = useState(false);
+
+  const getPermState = (key) => {
+    if (permissions?.all) return { view: true, maintain: true };
+    const val = permissions?.[key];
+    if (val === true) return { view: true, maintain: true };
+    if (typeof val === 'object' && val !== null) {
+      return { view: Boolean(val.view || val.maintain), maintain: Boolean(val.maintain) };
+    }
+    return { view: false, maintain: false };
+  };
+
+  const handleToggleView = (key) => {
+    const curr = getPermState(key);
+    const nextView = !curr.view;
+    const nextMaintain = nextView ? curr.maintain : false;
+    setPermissions(prev => {
+      const { all, ...rest } = prev || {};
+      return { ...rest, [key]: { view: nextView, maintain: nextMaintain } };
+    });
+  };
+
+  const handleToggleMaintain = (key) => {
+    const curr = getPermState(key);
+    const nextMaintain = !curr.maintain;
+    const nextView = nextMaintain ? true : curr.view;
+    setPermissions(prev => {
+      const { all, ...rest } = prev || {};
+      return { ...rest, [key]: { view: nextView, maintain: nextMaintain } };
+    });
+  };
+
+  const handleSelectAllMode = (mode) => {
+    if (mode === 'clear') {
+      const updated = {};
+      MODULE_PERMISSIONS.forEach(m => { updated[m.key] = { view: false, maintain: false }; });
+      setPermissions(updated);
+    } else if (mode === 'view') {
+      const updated = {};
+      MODULE_PERMISSIONS.forEach(m => { updated[m.key] = { view: true, maintain: false }; });
+      setPermissions(updated);
+    } else if (mode === 'full') {
+      const updated = { all: true };
+      MODULE_PERMISSIONS.forEach(m => { updated[m.key] = { view: true, maintain: true }; });
+      setPermissions(updated);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!name.trim()) return toast.error('กรุณาระบุชื่อบทบาท');
+    setSaving(true);
+    try {
+      const payload = { name: name.trim(), description, permissions };
+      if (isEdit) {
+        await api.put(`/users/roles/${role.id}`, payload);
+        toast.success('แก้ไขบทบาทสำเร็จ');
+      } else {
+        await api.post('/users/roles', payload);
+        toast.success('สร้างบทบาทใหม่สำเร็จ');
+      }
+      onSaved();
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || err.response?.data?.message || 'เกิดข้อผิดพลาด');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 text-gray-900 dark:text-slate-100 rounded-3xl shadow-2xl w-full max-w-xl p-6 max-h-[92vh] flex flex-col overflow-hidden animate-scale-up">
+        <div className="flex items-center justify-between border-b border-gray-100 dark:border-slate-800 pb-3 mb-4">
+          <h3 className="text-lg font-bold text-gray-800 dark:text-slate-100 flex items-center gap-2">
+            <span>🎭</span> {isEdit ? 'แก้ไขบทบาท & สิทธิ์การใช้งาน' : 'เพิ่มบทบาทใหม่'}
+          </h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-slate-200 font-bold text-xl cursor-pointer">✕</button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto pr-1 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-slate-200 mb-1">
+              ชื่อบทบาท <span className="text-red-500">*</span>
+            </label>
+            <input
+              required
+              disabled={isSystemAdmin}
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className="input-field font-bold dark:bg-slate-800 dark:text-slate-100 dark:border-slate-700"
+              placeholder="เช่น พนักงานบัญชี, หัวหน้าคลังสินค้า, บาริสต้า"
+            />
+            {isSystemAdmin && (
+              <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">🔒 สงวนชื่อบทบาทระบบสูงสุด (Admin) ไม่สามารถเปลี่ยนชื่อได้</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-slate-200 mb-1">รายละเอียด / คำอธิบายบทบาท</label>
+            <input
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              className="input-field text-sm dark:bg-slate-800 dark:text-slate-100 dark:border-slate-700"
+              placeholder="เช่น มีสิทธิ์ดูรายงานการเงินและออกใบกำกับภาษี"
+            />
+          </div>
+
+          <div className="pt-2 border-t border-gray-100 dark:border-slate-800">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-3">
+              <div>
+                <label className="block text-xs font-bold text-gray-800 dark:text-slate-100">
+                  🔑 กำหนดสิทธิ์การเข้าถึงเมนู (Granular Permissions)
+                </label>
+                <p className="text-[10px] text-gray-500 dark:text-slate-400">แยกสิทธิ์การดูข้อมูล (View) และการจัดการ/แก้ไข (Maintain) แต่ละหน้า</p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button type="button" onClick={() => handleSelectAllMode('full')} className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline font-bold cursor-pointer">
+                  จัดการได้ทั้งหมด
+                </button>
+                <span className="text-gray-300 dark:text-slate-700">|</span>
+                <button type="button" onClick={() => handleSelectAllMode('view')} className="text-[10px] text-sky-600 dark:text-sky-400 hover:underline font-bold cursor-pointer">
+                  ดูได้อย่างเดียว
+                </button>
+                <span className="text-gray-300 dark:text-slate-700">|</span>
+                <button type="button" onClick={() => handleSelectAllMode('clear')} className="text-[10px] text-gray-400 dark:text-slate-500 hover:underline font-medium cursor-pointer">
+                  ล้างทั้งหมด
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2.5 max-h-72 overflow-y-auto p-1">
+              {MODULE_PERMISSIONS.map(m => {
+                const { view, maintain } = getPermState(m.key);
+                return (
+                  <div
+                    key={m.key}
+                    className={`p-3 rounded-2xl border transition-all ${
+                      maintain
+                        ? 'bg-indigo-50/70 dark:bg-indigo-950/60 border-indigo-200 dark:border-indigo-700/80'
+                        : view
+                        ? 'bg-sky-50/70 dark:bg-sky-950/60 border-sky-200 dark:border-sky-700/80'
+                        : 'bg-gray-50/60 dark:bg-slate-800/50 border-gray-200 dark:border-slate-700/60'
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-gray-800 dark:text-slate-100 flex items-center gap-1.5">
+                          <span>{m.label}</span>
+                        </p>
+                        <p className="text-[10px] text-gray-500 dark:text-slate-400 leading-snug">{m.desc}</p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {/* View Permission Toggle */}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleView(m.key)}
+                          className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1 border cursor-pointer ${
+                            view
+                              ? 'bg-sky-600 dark:bg-sky-500 text-white border-sky-600 dark:border-sky-500 shadow-xs'
+                              : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-300 dark:border-slate-600 hover:border-gray-400'
+                          }`}
+                        >
+                          <span>👁️</span>
+                          <span>ดูข้อมูล</span>
+                          {view && <span>✓</span>}
+                        </button>
+
+                        {/* Maintain Permission Toggle */}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleMaintain(m.key)}
+                          className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1 border cursor-pointer ${
+                            maintain
+                              ? 'bg-indigo-600 dark:bg-indigo-500 text-white border-indigo-600 dark:border-indigo-500 shadow-xs'
+                              : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-300 dark:border-slate-600 hover:border-gray-400'
+                          }`}
+                        >
+                          <span>✏️</span>
+                          <span>จัดการ/แก้ไข</span>
+                          {maintain && <span>✓</span>}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-3 border-t border-gray-100 dark:border-slate-800">
+            <button type="button" onClick={onClose} className="btn-ghost flex-1">ยกเลิก</button>
+            <button type="submit" disabled={saving} className="btn-primary flex-1">
+              {saving ? 'กำลังบันทึก...' : '💾 บันทึกบทบาท'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 function UserModal({ user, roles, onClose, onSaved }) {
   const isEdit = !!user?.id;
@@ -44,7 +289,7 @@ function UserModal({ user, roles, onClose, onSaved }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-4">{isEdit ? '✏️ แก้ไขผู้ใช้งาน' : '➕ เพิ่มผู้ใช้งาน'}</h3>
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -76,7 +321,6 @@ function UserModal({ user, roles, onClose, onSaved }) {
                   value={form.pin_code[i] || ''}
                   onMouseDown={e => {
                     setForm(prev => ({ ...prev, pin_code: '' }));
-                    // Use setTimeout to ensure focus happens after the click event finishes
                     const parent = e.currentTarget.parentNode;
                     setTimeout(() => {
                       if (parent && parent.children[0]) parent.children[0].focus();
@@ -89,7 +333,6 @@ function UserModal({ user, roles, onClose, onSaved }) {
                     pinArr[i] = val;
                     const finalPin = pinArr.join('').slice(0, 4);
                     setForm({ ...form, pin_code: finalPin });
-                    
                     if (val && i < 3) {
                       const next = e.target.parentNode.children[i + 1];
                       if (next) next.focus();
@@ -109,10 +352,14 @@ function UserModal({ user, roles, onClose, onSaved }) {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">บทบาท <span className="text-red-500">*</span></label>
+            <label className="block text-sm font-medium mb-1">บทบาท (ประเภทบัญชี) <span className="text-red-500">*</span></label>
             <select required value={form.role_id} onChange={e => setForm({ ...form, role_id: e.target.value })} className="input-field">
               <option value="">-- เลือกบทบาท --</option>
-              {roles.map(r => <option key={r.id} value={r.id}>{ROLE_LABELS[r.name] || r.name}</option>)}
+              {roles.map(r => (
+                <option key={r.id} value={r.id}>
+                  {ROLE_LABELS[r.name] || r.name} {r.description ? `(${r.description})` : ''}
+                </option>
+              ))}
             </select>
           </div>
           {isEdit && (
@@ -150,55 +397,49 @@ function StoreModal({ store, onClose, onSaved }) {
         tax_id: store.tax_id || '',
         promptpay_number: store.promptpay_number || '',
         promptpay_name: store.promptpay_name || '',
-        vat_rate: store.vat_rate ?? 7
+        vat_rate: store.vat_rate ?? 7,
       });
     }
-  }, [isEdit, store]);
+  }, [store, isEdit]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
-      const payload = { ...form, vat_rate: parseFloat(form.vat_rate) || 0 };
-      if (isEdit) await api.put(`/stores/${store.id}`, payload);
-      else await api.post('/stores', payload);
-      toast.success(isEdit ? 'แก้ไขสาขาสำเร็จ' : 'เพิ่มสาขาสำเร็จ');
+      if (isEdit) {
+        await api.put(`/stores/${store.id}`, form);
+        toast.success('แก้ไขสาขาสำเร็จ');
+      } else {
+        await api.post('/stores', form);
+        toast.success('เพิ่มสาขาสำเร็จ');
+      }
       onSaved();
-    } catch (err) { 
-      toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาด'); 
-    }
-    finally { setSaving(false); }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาด');
+    } finally { setSaving(false); }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-4">{isEdit ? '✏️ แก้ไขสาขา' : '➕ เพิ่มสาขาใหม่'}</h3>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
             <label className="block text-sm font-medium mb-1">ชื่อสาขา <span className="text-red-500">*</span></label>
-            <input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="input-field" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">เบอร์โทรศัพท์</label>
-            <input value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} className="input-field" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">PromptPay Number</label>
-            <input value={form.promptpay_number || ''} onChange={e => setForm({ ...form, promptpay_number: e.target.value })} className="input-field" placeholder="08x-xxx-xxxx / ID บัตรประชาชน" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">ชื่อบัญชีพร้อมเพย์</label>
-            <input value={form.promptpay_name || ''} onChange={e => setForm({ ...form, promptpay_name: e.target.value })} className="input-field" placeholder="เช่น นาย สมชาย ใจดี" />
+            <input required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="input-field" placeholder="เช่น สาขาหลัก, สาขา 2" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">ที่อยู่</label>
-            <textarea value={form.address || ''} onChange={e => setForm({ ...form, address: e.target.value })} className="input-field" rows={2} />
+            <input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} className="input-field" placeholder="ที่อยู่สาขา" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">เบอร์โทรศัพท์</label>
+            <input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} className="input-field" placeholder="08X-XXX-XXXX" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium mb-1">เลขผู้เสียภาษี</label>
-              <input value={form.tax_id || ''} onChange={e => setForm({ ...form, tax_id: e.target.value })} className="input-field" />
+              <input value={form.tax_id} onChange={e => setForm({ ...form, tax_id: e.target.value })} className="input-field" />
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">VAT (%)</label>
@@ -208,6 +449,175 @@ function StoreModal({ store, onClose, onSaved }) {
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-ghost flex-1">ยกเลิก</button>
             <button type="submit" disabled={saving} className="btn-primary flex-1">💾 บันทึก</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function CategoryModal({ category, onClose, onSaved }) {
+  const isEdit = !!category?.id;
+  const [form, setForm] = useState({
+    name: category?.name || '',
+    description: category?.description || '',
+    sort_order: category?.sort_order ?? 0,
+    is_raw_material: Boolean(category?.is_raw_material || category?.name === 'วัตถุดิบ' || (category?.name && category.name.includes('วัตถุดิบ'))),
+  });
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!form.name.trim()) return toast.error('กรุณาระบุชื่อหมวดหมู่');
+    setSaving(true);
+    try {
+      const payload = {
+        ...form,
+        is_raw_material: form.is_raw_material ? 1 : 0
+      };
+      if (isEdit) {
+        await api.put(`/categories/${category.id}`, payload);
+        toast.success('แก้ไขหมวดหมู่สำเร็จ');
+      } else {
+        await api.post('/categories', payload);
+        toast.success('เพิ่มหมวดหมู่สำเร็จ');
+      }
+      onSaved();
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'เกิดข้อผิดพลาดในการบันทึก');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <h3 className="text-lg font-bold text-gray-800 mb-4">
+          {isEdit ? '✏️ แก้ไขหมวดหมู่สินค้า' : '🏷️ เพิ่มหมวดหมู่สินค้าใหม่'}
+        </h3>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">ชื่อหมวดหมู่ *</label>
+            <input
+              required
+              value={form.name}
+              onChange={e => setForm({ ...form, name: e.target.value })}
+              className="input-field"
+              placeholder="เช่น เบเกอรี่, ชาเขียว, กาแฟ, วัตถุดิบ"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">รายละเอียดหมวดหมู่</label>
+            <textarea
+              rows={2}
+              value={form.description}
+              onChange={e => setForm({ ...form, description: e.target.value })}
+              className="input-field"
+              placeholder="รายละเอียดสินค้ากลุ่มนี้ (ถ้ามี)"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">ลำดับการแสดงผล (Sort Order)</label>
+            <input
+              type="number"
+              value={form.sort_order}
+              onChange={e => setForm({ ...form, sort_order: parseInt(e.target.value) || 0 })}
+              className="input-field"
+            />
+          </div>
+          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1">
+            <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-amber-900">
+              <input
+                type="checkbox"
+                checked={form.is_raw_material}
+                onChange={e => setForm({ ...form, is_raw_material: e.target.checked })}
+                className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>🌾 เป็นหมวดหมู่วัตถุดิบ (Raw Material Category)</span>
+            </label>
+            <p className="text-[11px] text-amber-700 pl-6 leading-tight">
+              สินค้าในหมวดนี้จะถูกระบุเป็นวัตถุดิบ และล็อกราคาขายเป็น ฿0 อัตโนมัติ (ไม่ต้องตั้งราคาขาย)
+            </p>
+          </div>
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <button type="button" onClick={onClose} className="btn-ghost flex-1">ยกเลิก</button>
+            <button type="submit" disabled={saving} className="btn-primary flex-1 disabled:opacity-50">
+              {saving ? 'กำลังบันทึก...' : '💾 บันทึกหมวดหมู่'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function UnitModal({ unit, onClose, onSaved }) {
+  const isEdit = !!unit?.oldValue;
+  const [form, setForm] = useState({
+    name: unit?.name || '',
+    symbol: unit?.symbol || '',
+  });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const name = form.name.trim();
+    const symbol = form.symbol.trim();
+    if (!name) return toast.error('กรุณาระบุชื่อหน่วยนับ');
+
+    const displayLabel = symbol ? `${name} (${symbol})` : name;
+    let savedUnits = [];
+    try {
+      const existing = localStorage.getItem('pos_custom_units');
+      savedUnits = existing ? JSON.parse(existing) : [];
+    } catch {}
+
+    if (isEdit) {
+      savedUnits = savedUnits.map(u => (u.value === unit.oldValue || u.name === unit.name) ? { value: name, label: displayLabel, name, symbol } : u);
+      toast.success(`แก้ไขหน่วยนับ "${displayLabel}" สำเร็จ`);
+    } else {
+      if (savedUnits.some(u => u.value.toLowerCase() === name.toLowerCase())) {
+        return toast.error(`หน่วยนับ "${name}" มีอยู่แล้ว`);
+      }
+      savedUnits.push({ value: name, label: displayLabel, name, symbol });
+      toast.success(`เพิ่มหน่วยนับ "${displayLabel}" สำเร็จ`);
+    }
+
+    try {
+      localStorage.setItem('pos_custom_units', JSON.stringify(savedUnits));
+    } catch {}
+    onSaved();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <h3 className="text-lg font-bold text-gray-800 mb-4">
+          {isEdit ? '✏️ แก้ไขหน่วยนับ (Custom Unit)' : '📏 เพิ่มหน่วยนับใหม่ (Custom Unit)'}
+        </h3>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">ชื่อหน่วยนับ (ภาษาไทย/อังกฤษ) *</label>
+            <input
+              required
+              value={form.name}
+              onChange={e => setForm({ ...form, name: e.target.value })}
+              className="input-field"
+              placeholder="เช่น ถัง, ปอนด์, ถาด, กะละมัง, cc"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">ตัวย่อ/สัญลักษณ์ภาษาอังกฤษ (ถ้ามี)</label>
+            <input
+              value={form.symbol}
+              onChange={e => setForm({ ...form, symbol: e.target.value })}
+              className="input-field"
+              placeholder="เช่น bucket, lb, tray, cc"
+            />
+          </div>
+          <div className="flex gap-3 pt-2 border-t border-gray-100">
+            <button type="button" onClick={onClose} className="btn-ghost flex-1">ยกเลิก</button>
+            <button type="submit" className="btn-primary flex-1">💾 บันทึกหน่วยนับ</button>
           </div>
         </form>
       </div>
@@ -242,7 +652,7 @@ function AssignmentModal({ user, stores, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
         <h3 className="font-bold text-gray-800 mb-1">🔑 กำหนดสาขา</h3>
         <p className="text-sm text-gray-500 mb-4">ผู้ใช้: {user.full_name}</p>
@@ -265,26 +675,37 @@ function AssignmentModal({ user, stores, onClose }) {
 
 export default function SettingsPage() {
   const { refreshStores, refreshActiveStore } = useAuth();
+  const [activeTab, setActiveTab] = useState('stores_users'); // 'stores_users' | 'categories' | 'units'
   const [storeList, setStoreList] = useState([]);
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [customUnits, setCustomUnits] = useState([]);
+
   const [userModal, setUserModal] = useState(null);
+  const [roleModal, setRoleModal] = useState(null);
   const [storeModal, setStoreModal] = useState(null);
+  const [categoryModal, setCategoryModal] = useState(null);
+  const [unitModal, setUnitModal] = useState(null);
   const [assignModal, setAssignModal] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [deleteCategoryConfirm, setDeleteCategoryConfirm] = useState(null);
+  const [deleteRoleConfirm, setDeleteRoleConfirm] = useState(null);
 
   useEffect(() => {
     loadStores();
     loadUsers();
     loadRoles();
+    loadCategories();
+    loadCustomUnits();
   }, []);
 
   const loadStores = async () => {
     try {
       const res = await api.get('/stores');
       setStoreList(res.data.data);
-      refreshStores(); // Update global context/localStorage
-      refreshActiveStore(); // Force refresh current store details (VAT etc)
+      refreshStores();
+      refreshActiveStore();
     } catch {}
   };
 
@@ -298,8 +719,24 @@ export default function SettingsPage() {
   const loadRoles = async () => {
     try {
       const res = await api.get('/users/roles');
-      setRoles(res.data.data);
+      setRoles(res.data.data || []);
+    } catch (err) {
+      toast.error('ไม่สามารถโหลดข้อมูลบทบาทได้');
+    }
+  };
+
+  const loadCategories = async () => {
+    try {
+      const res = await api.get('/categories');
+      setCategories(res.data.data || []);
     } catch {}
+  };
+
+  const loadCustomUnits = () => {
+    try {
+      const saved = localStorage.getItem('pos_custom_units');
+      setCustomUnits(saved ? JSON.parse(saved) : []);
+    } catch { setCustomUnits([]); }
   };
 
   const handleDeleteUser = async (user) => {
@@ -336,86 +773,546 @@ export default function SettingsPage() {
     }
   };
 
+  const handleDeleteCategory = async (cat) => {
+    try {
+      await api.delete(`/categories/${cat.id}`);
+      toast.success(`ลบหมวดหมู่ "${cat.name}" สำเร็จ`);
+      setDeleteCategoryConfirm(null);
+      loadCategories();
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || err.response?.data?.message || 'ไม่สามารถลบหมวดหมู่นี้ได้');
+    }
+  };
+
+  const handleDeleteUnit = (unitToDelete) => {
+    if (!window.confirm(`คุณต้องการลบหน่วยนับ "${unitToDelete.label || unitToDelete.value}" ใช่หรือไม่?`)) return;
+    try {
+      const updated = customUnits.filter(u => u.value !== unitToDelete.value);
+      localStorage.setItem('pos_custom_units', JSON.stringify(updated));
+      setCustomUnits(updated);
+      toast.success(`ลบหน่วยนับ "${unitToDelete.label || unitToDelete.value}" สำเร็จ`);
+    } catch {
+      toast.error('เกิดข้อผิดพลาดในการลบหน่วยนับ');
+    }
+  };
+
+  const handleDeleteRole = async (role) => {
+    try {
+      await api.delete(`/users/roles/${role.id}`);
+      toast.success(`ลบบทบาท "${role.name}" สำเร็จ`);
+      setDeleteRoleConfirm(null);
+      loadRoles();
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || err.response?.data?.message || 'ไม่สามารถลบบทบาทนี้ได้');
+    }
+  };
+
   return (
     <div className="p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)]">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">⚙️ ตั้งค่าระบบ (ผู้ดูแลระบบ)</h1>
-
-      <div className="flex flex-col lg:flex-row gap-6 items-start">
-        {/* LEFT — Store Management */}
-        <div className="w-full lg:flex-1 min-w-0">
-          <div className="card">
-            <div className="flex items-center justify-between border-b pb-3 mb-4">
-              <h3 className="font-semibold text-lg">🏢 จัดการสาขา</h3>
-              <button onClick={() => setStoreModal('new')} className="btn-primary !py-2 !px-4 text-sm">
-                + เพิ่มสาขา
-              </button>
-            </div>
-            <div className="space-y-2">
-              {storeList.map(s => (
-                <div key={s.id} className="flex items-center gap-3 p-4 rounded-2xl border border-gray-100 bg-white shadow-sm hover:shadow-md transition-all">
-                  <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-lg flex-shrink-0">🏪</div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-gray-800 truncate">{s.name}</p>
-                    <p className="text-xs text-gray-500 truncate">{s.phone || 'ไม่มีเบอร์โทร'} · VAT {s.vat_rate}%</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => setStoreModal(s)} className="text-sm text-blue-600 hover:underline px-1 font-medium">แก้ไข</button>
-                    {storeList.length > 1 && (
-                      <button onClick={() => handleDeleteStore(s)} className="text-sm text-red-500 hover:underline px-1 font-medium">ลบ</button>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {storeList.length === 0 && <p className="text-center py-10 text-gray-400">ยังไม่มีข้อมูลสาขา</p>}
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT — User Management */}
-        <div className="w-full lg:flex-1 min-w-0">
-          <div className="card">
-            <div className="flex items-center justify-between border-b pb-3 mb-4">
-              <h3 className="font-semibold text-lg">👥 จัดการผู้ใช้งาน</h3>
-              <button onClick={() => setUserModal('new')} className="btn-primary !py-2 !px-4 text-sm">
-                + เพิ่มผู้ใช้
-              </button>
-            </div>
-            <div className="space-y-2">
-              {users.map((u) => (
-                <div key={u.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 hover:bg-gray-50 transition-colors">
-                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-lg flex-shrink-0">
-                    {u.role_name === 'admin' ? '👑' : u.role_name === 'manager' ? '📊' : '🛒'}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-800 truncate">{u.full_name}</p>
-                    <p className="text-xs text-gray-500 truncate">@{u.username} · {ROLE_LABELS[u.role_name] || u.role_name} · 🔑 ****</p>
-                  </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button onClick={() => setAssignModal(u)} className="text-[10px] bg-purple-50 text-purple-600 px-2 py-1 rounded-lg border border-purple-100 font-bold hover:bg-purple-100" title="กำหนดสาขา">🔑 สิทธิ์สาขา</button>
-                    <button onClick={() => setUserModal(u)} className="text-xs text-blue-600 hover:underline px-1 py-1">แก้ไข</button>
-                    <button onClick={() => setDeleteConfirm(u)} className="text-xs text-red-500 hover:underline px-1 py-1">ลบ</button>
-                  </div>
-                </div>
-              ))}
-              {users.length === 0 && <p className="text-sm text-gray-400 text-center py-8">ไม่พบผู้ใช้งาน</p>}
-            </div>
-          </div>
+      {/* Title */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-800">⚙️ ตั้งค่าระบบ (System Management)</h1>
+          <p className="text-xs text-gray-500 mt-1">จัดการข้อมูลสาขา ผู้ใช้งาน หมวดหมู่สินค้า และหน่วยนับสินค้า</p>
         </div>
       </div>
 
-      {/* Modals */}
+      {/* Tabs */}
+      <div className="flex border-b border-gray-200 mb-6 gap-2 bg-white p-1 rounded-2xl shadow-sm overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('stores_users')}
+          className={`py-3 px-5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${
+            activeTab === 'stores_users'
+              ? 'bg-indigo-600 text-white shadow-md'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <span>🏢</span> สาขา & ผู้ใช้งาน
+        </button>
+        <button
+          onClick={() => setActiveTab('roles')}
+          className={`py-3 px-5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${
+            activeTab === 'roles'
+              ? 'bg-indigo-600 text-white shadow-md'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <span>🎭</span> จัดการบทบาท & สิทธิ์ ({roles.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('categories')}
+          className={`py-3 px-5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${
+            activeTab === 'categories'
+              ? 'bg-indigo-600 text-white shadow-md'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <span>🏷️</span> จัดการหมวดหมู่สินค้า ({categories.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('units')}
+          className={`py-3 px-5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${
+            activeTab === 'units'
+              ? 'bg-indigo-600 text-white shadow-md'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <span>📏</span> จัดการหน่วยนับสินค้า ({SYSTEM_UNITS.length + customUnits.length})
+        </button>
+      </div>
+
+      {/* TAB 1: Stores & Users */}
+      {activeTab === 'stores_users' && (
+        <div className="flex flex-col lg:flex-row gap-6 items-start">
+          {/* Store Management */}
+          <div className="w-full lg:flex-1 min-w-0">
+            <div className="card">
+              <div className="flex items-center justify-between border-b pb-3 mb-4">
+                <div>
+                  <h3 className="font-semibold text-lg">🏢 จัดการสาขา</h3>
+                  <p className="text-xs text-gray-400">สร้างและตั้งค่าข้อมูลสาขาขาย</p>
+                </div>
+                <button onClick={() => setStoreModal('new')} className="btn-primary !py-2 !px-4 text-sm">
+                  + เพิ่มสาขา
+                </button>
+              </div>
+              <div className="space-y-2">
+                {storeList.map(s => (
+                  <div key={s.id} className="flex items-center gap-3 p-4 rounded-2xl border border-gray-100 bg-white shadow-sm hover:shadow-md transition-all">
+                    <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-lg flex-shrink-0">🏪</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-gray-800 truncate">{s.name}</p>
+                      <p className="text-xs text-gray-500 truncate">{s.phone || 'ไม่มีเบอร์โทร'} · VAT {s.vat_rate}%</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setStoreModal(s)} className="text-sm text-blue-600 hover:underline px-1 font-medium">แก้ไข</button>
+                      {storeList.length > 1 && (
+                        <button onClick={() => handleDeleteStore(s)} className="text-sm text-red-500 hover:underline px-1 font-medium">ลบ</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {storeList.length === 0 && <p className="text-center py-10 text-gray-400">ยังไม่มีข้อมูลสาขา</p>}
+              </div>
+            </div>
+          </div>
+
+          {/* User Management */}
+          <div className="w-full lg:flex-1 min-w-0">
+            <div className="card">
+              <div className="flex items-center justify-between border-b pb-3 mb-4">
+                <div>
+                  <h3 className="font-semibold text-lg">👥 จัดการผู้ใช้งาน</h3>
+                  <p className="text-xs text-gray-400">จัดการบัญชีและสิทธิ์การเข้าถึงของผู้ใช้</p>
+                </div>
+                <button onClick={() => setUserModal('new')} className="btn-primary !py-2 !px-4 text-sm">
+                  + เพิ่มผู้ใช้
+                </button>
+              </div>
+              <div className="space-y-2">
+                {users.map((u) => (
+                  <div key={u.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 hover:bg-gray-50 transition-colors">
+                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-lg flex-shrink-0">
+                      {u.role_name === 'admin' ? '👑' : u.role_name === 'manager' ? '📊' : '🛒'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-800 truncate">{u.full_name}</p>
+                      <p className="text-xs text-gray-500 truncate">@{u.username} · {ROLE_LABELS[u.role_name] || u.role_name} · 🔑 ****</p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button onClick={() => setAssignModal(u)} className="text-[10px] bg-purple-50 text-purple-600 px-2 py-1 rounded-lg border border-purple-100 font-bold hover:bg-purple-100" title="กำหนดสาขา">🔑 สิทธิ์สาขา</button>
+                      <button onClick={() => setUserModal(u)} className="text-xs text-blue-600 hover:underline px-1 py-1">แก้ไข</button>
+                      <button onClick={() => setDeleteConfirm(u)} className="text-xs text-red-500 hover:underline px-1 py-1">ลบ</button>
+                    </div>
+                  </div>
+                ))}
+                {users.length === 0 && <p className="text-sm text-gray-400 text-center py-8">ไม่พบผู้ใช้งาน</p>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: Roles & Permissions Management */}
+      {activeTab === 'roles' && (
+        <div className="space-y-6">
+          <div className="card">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4 mb-4">
+              <div>
+                <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2">
+                  <span>🎭</span> จัดการบทบาท & สิทธิ์การใช้งาน (Role & Account Type Management)
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  สร้างและกำหนดสิทธิ์การเข้าถึงเมนูต่างๆ ของแต่ละประเภทบัญชีผู้ใช้
+                </p>
+              </div>
+              <button
+                onClick={() => setRoleModal('new')}
+                className="btn-primary !py-2.5 !px-4 text-sm shadow-md flex items-center gap-1.5"
+              >
+                <span>➕</span>
+                <span>เพิ่มบทบาทใหม่</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {roles.map(r => {
+                const perms = r.permissions || {};
+                const activePermsCount = MODULE_PERMISSIONS.filter(m => perms.all || perms[m.key]).length;
+
+                return (
+                  <div key={r.id} className="p-4.5 rounded-2xl border border-gray-200 dark:border-slate-700/80 bg-white dark:bg-slate-800/90 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-3.5">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-2xl">
+                            {r.name === 'admin' ? '👑' : r.name === 'manager' ? '📊' : r.name === 'cashier' ? '🛒' : '🎭'}
+                          </span>
+                          <div>
+                            <h4 className="font-bold text-gray-900 dark:text-slate-100 text-base">
+                              {ROLE_LABELS[r.name] || r.name}
+                            </h4>
+                            <p className="text-[10px] text-purple-700 dark:text-purple-300 font-bold bg-purple-50 dark:bg-purple-950/80 border border-purple-200 dark:border-purple-800/60 px-2.5 py-0.5 rounded-full inline-block">
+                              👥 สมาชิก {r.user_count || 0} คน
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {r.description && (
+                        <p className="text-xs text-gray-600 dark:text-slate-300 mb-3 line-clamp-2">{r.description}</p>
+                      )}
+
+                      {/* Permissions Tags */}
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] font-bold text-gray-500 dark:text-slate-400 flex items-center justify-between">
+                          <span>สิทธิ์การใช้งาน (Permissions):</span>
+                          <span className="text-gray-700 dark:text-slate-200">{perms.all ? 'สิทธิ์ทั้งหมด (All)' : `${activePermsCount} จาก ${MODULE_PERMISSIONS.length} เมนู`}</span>
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {MODULE_PERMISSIONS.map(m => {
+                            const isAll = Boolean(perms.all);
+                            const mod = perms[m.key];
+                            const view = isAll || mod === true || Boolean(mod?.view || mod?.maintain);
+                            const maintain = isAll || mod === true || Boolean(mod?.maintain);
+
+                            if (!view && !maintain) {
+                              return (
+                                <span key={m.key} className="text-[10.5px] px-2 py-0.5 rounded-lg font-medium bg-gray-100 dark:bg-slate-700/50 text-gray-400 dark:text-slate-400 border border-gray-200 dark:border-slate-700/60 line-through opacity-60">
+                                  {m.label.split(' ')[1] || m.label}
+                                </span>
+                              );
+                            }
+
+                            return (
+                              <span
+                                key={m.key}
+                                className={`text-[11px] px-2.5 py-1 rounded-xl font-bold flex items-center gap-1 border shadow-xs ${
+                                  maintain
+                                    ? 'bg-indigo-100 dark:bg-indigo-950/90 text-indigo-900 dark:text-indigo-100 border-indigo-300 dark:border-indigo-700/80'
+                                    : 'bg-sky-100 dark:bg-sky-950/90 text-sky-900 dark:text-sky-100 border-sky-300 dark:border-sky-700/80'
+                                }`}
+                              >
+                                <span>{maintain ? '✏️' : '👁️'}</span>
+                                <span>{m.label.split(' ')[1] || m.label}</span>
+                                <span className={maintain ? "text-[10px] font-extrabold text-indigo-700 dark:text-indigo-300" : "text-[10px] font-extrabold text-sky-700 dark:text-sky-300"}>
+                                  ({maintain ? 'จัดการ' : 'ดูเท่านั้น'})
+                                </span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action buttons */}
+                    <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 dark:border-slate-700/80">
+                      <button
+                        onClick={() => setRoleModal(r)}
+                        className="px-3 py-1.5 bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-200 hover:bg-blue-200 dark:hover:bg-blue-900 rounded-xl text-xs font-bold border border-blue-200 dark:border-blue-800 transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        ✏️ แก้ไขสิทธิ์
+                      </button>
+                      {r.name !== 'admin' && (
+                        <button
+                          onClick={() => setDeleteRoleConfirm(r)}
+                          className="px-3 py-1.5 bg-red-100 dark:bg-red-950/80 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900 rounded-xl text-xs font-bold border border-red-200 dark:border-red-800 transition-all flex items-center gap-1 cursor-pointer"
+                        >
+                          🗑️ ลบ
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: Category Management */}
+      {activeTab === 'categories' && (
+        <div className="space-y-6">
+          <div className="card">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4 mb-4">
+              <div>
+                <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2">
+                  <span>🏷️</span> จัดการหมวดหมู่สินค้า (Category Management)
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  สร้าง แก้ไข และเรียงลำดับหมวดหมู่สินค้าในระบบขาย POS
+                </p>
+              </div>
+              <button
+                onClick={() => setCategoryModal('new')}
+                className="btn-primary !py-2.5 !px-4 text-sm shadow-md"
+              >
+                + เพิ่มหมวดหมู่ใหม่
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50/70 text-xs font-bold text-gray-500 uppercase tracking-wider">
+                    <th className="py-3 px-4">หมวดหมู่</th>
+                    <th className="py-3 px-4">รายละเอียด</th>
+                    <th className="py-3 px-4 text-center">สินค้าในหมวด</th>
+                    <th className="py-3 px-4 text-center">ลำดับแสดง</th>
+                    <th className="py-3 px-4 text-right">จัดการ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-sm">
+                  {categories.map((cat) => (
+                    <tr key={cat.id} className="hover:bg-gray-50/80 transition-colors">
+                      <td className="py-3.5 px-4 font-bold text-gray-800">
+                        <div className="flex items-center gap-2">
+                          <span className="text-base">🏷️</span>
+                          <span>{cat.name}</span>
+                          {(cat.name === 'วัตถุดิบ' || cat.name.includes('วัตถุดิบ')) && (
+                            <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">
+                              วัตถุดิบสต๊อก
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4 text-gray-500 max-w-xs truncate">
+                        {cat.description || <span className="text-gray-300 italic">— ไม่มีคำอธิบาย —</span>}
+                      </td>
+                      <td className="py-3.5 px-4 text-center">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
+                          (cat.product_count || 0) > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'bg-gray-100 text-gray-400'
+                        }`}>
+                          📦 {cat.product_count || 0} รายการ
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-center font-mono text-xs font-semibold text-gray-600">
+                        {cat.sort_order ?? 0}
+                      </td>
+                      <td className="py-3.5 px-4 text-right space-x-2">
+                        <button
+                          onClick={() => setCategoryModal(cat)}
+                          className="px-3 py-1 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg text-xs font-bold transition-all"
+                        >
+                          ✏️ แก้ไข
+                        </button>
+                        <button
+                          onClick={() => setDeleteCategoryConfirm(cat)}
+                          className="px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-xs font-bold transition-all"
+                        >
+                          🗑️ ลบ
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {categories.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="py-12 text-center text-gray-400">
+                        ยังไม่มีหมวดหมู่สินค้าในระบบ กด "+ เพิ่มหมวดหมู่ใหม่" เพื่อสร้าง
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: Weight & Unit Management */}
+      {activeTab === 'units' && (
+        <div className="space-y-6">
+          <div className="card">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4 mb-4">
+              <div>
+                <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2">
+                  <span>📏</span> จัดการหน่วยนับและน้ำหนักสินค้า (Weight & Base Unit Management)
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  จัดการหน่วยนับมาตรฐานของระบบPOS และเพิ่มหน่วยนับย่อยเพิ่มเติมตามต้องการ
+                </p>
+              </div>
+              <button
+                onClick={() => setUnitModal('new')}
+                className="btn-primary !py-2.5 !px-4 text-sm shadow-md"
+              >
+                + เพิ่มหน่วยนับใหม่
+              </button>
+            </div>
+
+            {/* Custom Units Section */}
+            <div className="mb-8">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                  <span>✏️</span> หน่วยนับเพิ่มเติมที่กำหนดเอง (Custom Base Units)
+                  <span className="text-xs bg-indigo-100 text-indigo-700 font-bold px-2 py-0.5 rounded-full">
+                    {customUnits.length} รายการ
+                  </span>
+                </h4>
+              </div>
+
+              {customUnits.length === 0 ? (
+                <div className="p-8 border border-dashed border-gray-200 rounded-2xl text-center text-gray-400 bg-gray-50/50">
+                  <p className="text-2xl mb-1">📏</p>
+                  <p className="text-xs">ยังไม่มีหน่วยนับเพิ่มเติมที่กำหนดเอง</p>
+                  <button
+                    onClick={() => setUnitModal('new')}
+                    className="mt-3 text-xs font-bold text-indigo-600 hover:underline"
+                  >
+                    + คลิกที่นี่เพื่อเพิ่มหน่วยนับใหม่ (เช่น ถัง, ปอนด์, ถาด, cc)
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {customUnits.map((u, idx) => (
+                    <div key={idx} className="p-3.5 border border-indigo-100 bg-indigo-50/30 rounded-2xl flex items-center justify-between shadow-sm hover:border-indigo-300 transition-all">
+                      <div>
+                        <p className="font-bold text-sm text-gray-800">{u.label || u.value}</p>
+                        <p className="text-[11px] text-gray-400 font-mono">value: {u.value}</p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setUnitModal({ oldValue: u.value, name: u.name || u.value, symbol: u.symbol || '' })}
+                          className="p-1.5 text-xs text-blue-600 hover:bg-blue-50 rounded-lg"
+                          title="แก้ไข"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUnit(u)}
+                          className="p-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg"
+                          title="ลบ"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* System Default Units Section */}
+            <div>
+              <div className="flex items-center justify-between mb-3 border-t pt-5 border-gray-100">
+                <h4 className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                  <span>🔒</span> หน่วยนับมาตรฐานของระบบ (System Standard Base Units)
+                  <span className="text-xs bg-gray-100 text-gray-600 font-bold px-2 py-0.5 rounded-full">
+                    {SYSTEM_UNITS.length} รายการมาตรฐาน
+                  </span>
+                </h4>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {SYSTEM_UNITS.map((su) => (
+                  <div key={su.value} className="p-3.5 border border-gray-100 bg-gray-50/80 rounded-2xl flex items-center justify-between">
+                    <div>
+                      <p className="font-bold text-sm text-gray-800">{su.label}</p>
+                      <p className="text-[11px] text-gray-400">{su.desc}</p>
+                    </div>
+                    <span className="text-[10px] bg-gray-200/80 text-gray-600 font-semibold px-2 py-1 rounded-lg flex items-center gap-1">
+                      🔒 ระบบ
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODALS */}
       {userModal && <UserModal user={userModal === 'new' ? null : userModal} roles={roles} onClose={() => setUserModal(null)} onSaved={() => { setUserModal(null); loadUsers(); }} />}
+      {roleModal && <RoleModal role={roleModal === 'new' ? null : roleModal} onClose={() => setRoleModal(null)} onSaved={() => { setRoleModal(null); loadRoles(); }} />}
       {storeModal && <StoreModal store={storeModal === 'new' ? null : storeModal} onClose={() => setStoreModal(null)} onSaved={() => { setStoreModal(null); loadStores(); }} />}
+      {categoryModal && <CategoryModal category={categoryModal === 'new' ? null : categoryModal} onClose={() => setCategoryModal(null)} onSaved={() => { setCategoryModal(null); loadCategories(); }} />}
+      {unitModal && <UnitModal unit={unitModal === 'new' ? null : unitModal} onClose={() => setUnitModal(null)} onSaved={() => { setUnitModal(null); loadCustomUnits(); }} />}
       {assignModal && <AssignmentModal user={assignModal} stores={storeList} onClose={() => setAssignModal(null)} />}
+
+      {/* Delete User Confirm */}
       {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 text-center">
             <p className="text-4xl mb-3">⚠️</p>
-            <h3 className="font-bold text-gray-800 mb-1">ยืนยันการลบ</h3>
+            <h3 className="font-bold text-gray-800 mb-1">ยืนยันการลบผู้ใช้</h3>
             <p className="text-sm text-gray-500 mb-5">ต้องการลบผู้ใช้ <strong>{deleteConfirm.full_name}</strong> ใช่หรือไม่?</p>
             <div className="flex gap-3">
               <button onClick={() => setDeleteConfirm(null)} className="btn-ghost flex-1">ยกเลิก</button>
               <button onClick={() => handleDeleteUser(deleteConfirm)} className="btn-danger flex-1">ลบ</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Role Confirm */}
+      {deleteRoleConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 text-center animate-scale-up">
+            <p className="text-4xl mb-3">🗑️</p>
+            <h3 className="font-bold text-gray-800 mb-1">ยืนยันการลบบทบาท</h3>
+            <p className="text-sm text-gray-600 mb-2">
+              ต้องการลบบทบาท <strong>"{ROLE_LABELS[deleteRoleConfirm.name] || deleteRoleConfirm.name}"</strong> ใช่หรือไม่?
+            </p>
+            {(deleteRoleConfirm.user_count || 0) > 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 p-2.5 rounded-xl border border-amber-200 mb-4">
+                ⚠️ บทบาทนี้มีผู้ใช้งานผูกอยู่ <strong>{deleteRoleConfirm.user_count} คน</strong> กรุณาย้ายผู้ใช้งานไปบทบาทอื่นก่อนลบ
+              </p>
+            )}
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setDeleteRoleConfirm(null)} className="btn-ghost flex-1">ยกเลิก</button>
+              <button
+                onClick={() => handleDeleteRole(deleteRoleConfirm)}
+                disabled={(deleteRoleConfirm.user_count || 0) > 0}
+                className="btn-danger flex-1 disabled:opacity-40"
+              >
+                ยืนยันลบ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Category Confirm */}
+      {deleteCategoryConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 text-center">
+            <p className="text-4xl mb-3">🗑️</p>
+            <h3 className="font-bold text-gray-800 mb-1">ยืนยันการลบหมวดหมู่</h3>
+            <p className="text-sm text-gray-600 mb-2">
+              ต้องการลบหมวดหมู่ <strong>"{deleteCategoryConfirm.name}"</strong> ใช่หรือไม่?
+            </p>
+            {(deleteCategoryConfirm.product_count || 0) > 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 p-2.5 rounded-xl border border-amber-200 mb-4">
+                ⚠️ หมวดหมู่นี้มีสินค้าผูกอยู่ <strong>{deleteCategoryConfirm.product_count} รายการ</strong> กรุณาย้ายหมวดหมู่ของสินค้าก่อนทำการลบ
+              </p>
+            )}
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setDeleteCategoryConfirm(null)} className="btn-ghost flex-1">ยกเลิก</button>
+              <button
+                onClick={() => handleDeleteCategory(deleteCategoryConfirm)}
+                className="btn-danger flex-1"
+              >
+                ยืนยันลบ
+              </button>
             </div>
           </div>
         </div>

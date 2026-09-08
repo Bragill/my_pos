@@ -7,9 +7,10 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
     try {
       const saved = localStorage.getItem('pos_user');
-      return saved ? JSON.parse(saved) : null;
+      if (!saved || saved === 'undefined' || saved === 'null') return null;
+      return JSON.parse(saved);
     } catch {
-      localStorage.clear();
+      localStorage.removeItem('pos_user');
       return null;
     }
   });
@@ -17,14 +18,23 @@ export function AuthProvider({ children }) {
   const [stores, setStores] = useState(() => {
     try {
       const saved = localStorage.getItem('pos_available_stores');
-      return (saved && saved !== 'undefined') ? JSON.parse(saved) : [];
+      if (!saved || saved === 'undefined' || saved === 'null') return [];
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
+      localStorage.removeItem('pos_available_stores');
       return [];
     }
   });
 
   const [activeStoreId, setActiveStoreId] = useState(() => {
-    return localStorage.getItem('pos_active_store_id') || null;
+    try {
+      const saved = localStorage.getItem('pos_active_store_id');
+      if (!saved || saved === 'undefined' || saved === 'null') return null;
+      return saved;
+    } catch {
+      return null;
+    }
   });
 
   const [currentStore, setCurrentStore] = useState(null);
@@ -124,12 +134,35 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const refreshUser = async () => {
+    if (!user) return;
+    try {
+      const res = await api.get('/auth/me');
+      if (res.data.data) {
+        setUser(prev => {
+          const updatedUser = { ...prev, ...res.data.data };
+          localStorage.setItem('pos_user', JSON.stringify(updatedUser));
+          return updatedUser;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to refresh user profile:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      refreshUser();
+    }
+  }, []);
+
   useEffect(() => {
     if (user && activeStoreId) {
       refreshActiveStore();
       
       const interval = setInterval(() => {
         refreshActiveStore();
+        refreshUser();
       }, 30000);
       
       return () => clearInterval(interval);

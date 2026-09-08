@@ -20,7 +20,7 @@ async function seed() {
   const adminPin = await bcrypt.hash("0000", 10);
   await db.run("INSERT OR IGNORE INTO users (id,username,password_hash,pin_code,full_name,role_id) VALUES (?,?,?,?,?,?)", [uuidv4(), "admin", hash, adminPin, "Admin", actualAdminRoleId]);
 
-  const cats = ["เครื่องดื่ม","อาหาร","ขนม","อุปกรณ์","อื่นๆ"];
+  const cats = ["เครื่องดื่ม","อาหาร","ขนม","วัตถุดิบ","อุปกรณ์","อื่นๆ"];
   for (const c of cats) { await db.run("INSERT OR IGNORE INTO categories (id,name,store_id) VALUES (?,?,'store-1')", [uuidv4(), c]); }
 
   const catRows = await db.all("SELECT id,name FROM categories");

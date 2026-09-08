@@ -162,12 +162,13 @@ export default function POSPage() {
 
   const loadProducts = async () => {
     try {
-      const res = await api.get("/products", { params: { limit: 200 } });
-      setProducts(res.data.data);
-      cacheProducts(res.data.data);
+      const res = await api.get("/products", { params: { limit: 200, raw_material: "false" } });
+      const sellable = (res.data.data || []).filter(p => !p.is_raw_material);
+      setProducts(sellable);
+      cacheProducts(sellable);
     } catch {
       const cached = await getCachedProducts();
-      setProducts(cached);
+      setProducts((cached || []).filter(p => !p.is_raw_material));
     }
   };
 
@@ -456,20 +457,14 @@ export default function POSPage() {
   );
 
   const CategoryBar = () => (
-    <div className="flex items-center gap-2 px-3 py-2 overflow-x-auto border-b border-purple-100/40 bg-white/50 backdrop-blur-sm flex-shrink-0">
+    <div className="flex items-center gap-2 px-3 py-2 overflow-x-auto border-b border-purple-100/40 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50 backdrop-blur-sm flex-shrink-0">
       <button onClick={() => setSelectedCategory(null)}
-        className="whitespace-nowrap flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-all"
-        style={!selectedCategory
-          ? { backgroundImage: "linear-gradient(to left,#3300FC,#95008A,#EB0000)", color: "white" }
-          : { background: "rgba(255,255,255,0.8)", color: "#4b5563", border: "1px solid #e9d5ff" }}>
+        className={"whitespace-nowrap flex-shrink-0 category-tab " + (!selectedCategory ? 'category-tab-active' : 'category-tab-inactive')}>
         ทั้งหมด
       </button>
       {categories.map((cat) => (
         <button key={cat.id} onClick={() => setSelectedCategory(cat.id)}
-          className="whitespace-nowrap flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-all"
-          style={selectedCategory === cat.id
-            ? { backgroundImage: "linear-gradient(to left,#3300FC,#95008A,#EB0000)", color: "white" }
-            : { background: "rgba(255,255,255,0.8)", color: "#4b5563", border: "1px solid #e9d5ff" }}>
+          className={"whitespace-nowrap flex-shrink-0 category-tab " + (selectedCategory === cat.id ? 'category-tab-active' : 'category-tab-inactive')}>
           {cat.name}
         </button>
       ))}
@@ -483,12 +478,12 @@ export default function POSPage() {
   const CartItems = () => (
     <>
       {cart.items.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3 py-16">
+        <div className="flex flex-col items-center justify-center h-full text-gray-400 dark:text-slate-400 gap-3 py-16">
           <span className="text-5xl">🛒</span>
           <p className="text-sm">ยังไม่มีสินค้าในตะกร้า</p>
         </div>
       ) : (
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-100 dark:divide-slate-700">
           {cart.items.map((item) => (
             <CartItem 
               key={item.product_id} 
@@ -503,13 +498,13 @@ export default function POSPage() {
   );
 
   const CartSummary = () => (
-    <div className="border-t border-primary-100/60 p-4 space-y-2 bg-white/80 backdrop-blur-sm">
-      <div className="flex justify-between text-sm text-gray-500"><span>ยอดรวม</span><span className="font-medium text-gray-700">{formatCurrency(subTotal)}</span></div>
+    <div className="border-t border-primary-100/60 dark:border-slate-700 p-4 space-y-2 bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
+      <div className="flex justify-between text-sm text-gray-500 dark:text-slate-400"><span>ยอดรวม</span><span className="font-medium text-gray-700 dark:text-slate-200">{formatCurrency(subTotal)}</span></div>
       {cart.discount > 0 && <div className="flex justify-between text-sm text-danger-600"><span>ส่วนลด</span><span>-{formatCurrency(cart.discount)}</span></div>}
-      <div className="flex justify-between text-sm text-gray-500"><span>VAT {activeStore?.vat_rate ?? 7}%</span><span className="font-medium text-gray-700">{formatCurrency(tax)}</span></div>
-      <div className="flex justify-between text-xl font-bold pt-2 border-t border-primary-100/60">
-        <span className="text-gray-700">รวมทั้งสิ้น</span>
-        <span className="text-primary-600">{formatCurrency(total)}</span>
+      <div className="flex justify-between text-sm text-gray-500 dark:text-slate-400"><span>VAT {activeStore?.vat_rate ?? 7}%</span><span className="font-medium text-gray-700 dark:text-slate-200">{formatCurrency(tax)}</span></div>
+      <div className="flex justify-between text-xl font-bold pt-2 border-t border-primary-100/60 dark:border-slate-700">
+        <span className="text-gray-700 dark:text-slate-100">รวมทั้งสิ้น</span>
+        <span className="text-primary-600 dark:text-purple-400">{formatCurrency(total)}</span>
       </div>
       <button onClick={() => setPaymentModal(true)} disabled={cart.items.length === 0}
         className="btn-success w-full text-lg rounded-2xl disabled:opacity-40 disabled:cursor-not-allowed mt-1"
@@ -532,7 +527,7 @@ export default function POSPage() {
   );
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-56px)]" style={{ background: 'linear-gradient(160deg,#fff0f0 0%,#fdf0ff 50%,#f0f0ff 100%)' }}>
+    <div className="flex flex-col h-[calc(100dvh-56px)] page-bg-gradient">
 
       {/* DESKTOP (md+) */}
       <div className="hidden md:flex flex-1 min-h-0">
@@ -556,9 +551,9 @@ export default function POSPage() {
           </div>
         </div>
         {/* Right - Cart */}
-        <div className="w-[35%] flex flex-col bg-white/60 backdrop-blur-sm">
-          <div className="p-4 border-b border-primary-100/60 flex-shrink-0">
-            <h2 className="font-bold text-gray-700 flex items-center gap-2">
+        <div className="w-[35%] flex flex-col bg-white/60 dark:bg-slate-900/60 border-l border-purple-100/40 dark:border-slate-800 backdrop-blur-sm">
+          <div className="p-4 border-b border-primary-100/60 dark:border-slate-800 flex-shrink-0">
+            <h2 className="font-bold text-gray-700 dark:text-slate-100 flex items-center gap-2">
               <span className="text-lg">🧾</span> ตะกร้าสินค้า
             </h2>
           </div>

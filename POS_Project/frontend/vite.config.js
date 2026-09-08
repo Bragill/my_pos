@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import mkcert from 'vite-plugin-mkcert';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
@@ -20,7 +20,7 @@ export default defineConfig({
   },
   plugins: [
     react(),
-    mkcert(),
+    basicSsl(),
     VitePWA({
       injectRegister: 'auto',
       registerType: 'autoUpdate',
@@ -66,6 +66,8 @@ export default defineConfig({
         ],
       },
       workbox: { 
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
       },
     }),

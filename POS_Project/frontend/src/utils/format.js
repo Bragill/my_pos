@@ -1,9 +1,13 @@
 export function formatCurrency(amount) {
+  const num = Number(amount) || 0;
+  const decCount = (num.toString().split('.')[1] || '').length;
+  const decimals = Math.min(4, Math.max(2, decCount));
   return new Intl.NumberFormat('th-TH', {
     style: 'currency',
     currency: 'THB',
     minimumFractionDigits: 2,
-  }).format(amount);
+    maximumFractionDigits: decimals,
+  }).format(num);
 }
 
 export function formatNumber(num) {

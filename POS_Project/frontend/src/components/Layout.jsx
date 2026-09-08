@@ -2,18 +2,22 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
+import { useTheme } from '../contexts/ThemeContext';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import { canViewModule } from '../utils/permissions';
+import NetworkStatusIndicator, { OfflineTopBanner } from './NetworkStatusIndicator';
 
 const navItems = [
-  { path: '/pos', label: 'หน้าขาย', icon: '🛒', roles: ['admin', 'manager', 'cashier'] },
-  { path: '/sales', label: 'ประวัติการขาย', icon: '📜', roles: ['admin', 'manager', 'cashier'] },
-  { path: '/dashboard', label: 'แดชบอร์ด', icon: '📊', roles: ['admin', 'manager'] },
-  { path: '/products', label: 'สินค้า', icon: '📦', roles: ['admin', 'manager'] },
-  { path: '/inventory', label: 'สต๊อก', icon: '🏪', roles: ['admin', 'manager'] },
-  { path: '/ocr', label: 'OCR ใบเสร็จ', icon: '🧾', roles: ['admin', 'manager'] },
-  { path: '/customers', label: 'ลูกหนี้', icon: '📋', roles: ['admin', 'manager', 'cashier'] },
-  { path: '/settings', label: 'ตั้งค่า', icon: '⚙️', roles: ['admin'] },
+  { path: '/pos', label: 'หน้าขาย', icon: '🛒', moduleKey: 'pos', roles: ['admin', 'manager', 'cashier'] },
+  { path: '/sales', label: 'ประวัติการขาย', icon: '📜', moduleKey: 'sales', roles: ['admin', 'manager', 'cashier'] },
+  { path: '/dashboard', label: 'แดชบอร์ด', icon: '📊', moduleKey: 'dashboard', roles: ['admin', 'manager'] },
+  { path: '/products', label: 'สินค้า', icon: '📦', moduleKey: 'products', roles: ['admin', 'manager'] },
+  { path: '/inventory', label: 'สต๊อก', icon: '🏪', moduleKey: 'inventory', roles: ['admin', 'manager'] },
+  { path: '/recipes', label: 'สูตรอาหาร/วัตถุดิบ', icon: '🧪', moduleKey: 'recipes', roles: ['admin', 'manager'] },
+  { path: '/ocr', label: 'OCR ใบเสร็จ', icon: '🧾', moduleKey: 'ocr', roles: ['admin', 'manager'] },
+  { path: '/customers', label: 'ลูกหนี้', icon: '📋', moduleKey: 'customers', roles: ['admin', 'manager', 'cashier'] },
+  { path: '/settings', label: 'ตั้งค่า', icon: '⚙️', moduleKey: 'settings', roles: ['admin'] },
 ];
 
 const ROLE_LABEL = { admin: '👑 แอดมิน', manager: '📊 ผู้จัดการ', cashier: '🛒 แคชเชียร์' };
@@ -291,6 +295,7 @@ function HamburgerMenu({ navItems, user, onLogout }) {
 export default function Layout() {
   const { user, logout, stores, activeStoreId, switchStore } = useAuth();
   const { cart, clearCart } = useCart();
+  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
   const handleLogout = () => { 
@@ -302,10 +307,20 @@ export default function Layout() {
     logout(); 
     navigate('/login'); 
   };
-  const visibleNav = navItems.filter((item) => item.roles.includes(user?.role));
+  const visibleNav = navItems.filter((item) => {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+    if (user.permissions && Object.keys(user.permissions).length > 0) {
+      return canViewModule(user, item.moduleKey);
+    }
+    return item.roles.includes(user.role);
+  });
 
   return (
-    <div className="min-h-[100dvh] flex flex-col" style={{ background: 'linear-gradient(160deg,#fff0f0 0%,#fdf0ff 50%,#f0f0ff 100%)' }}>
+    <div className="min-h-[100dvh] flex flex-col page-bg-gradient">
+      {/* Offline Top Warning Banner */}
+      <OfflineTopBanner />
+
       {/* Navbar */}
       <nav className="shadow-md px-4 py-2 flex items-center justify-between sticky top-0 z-40 min-h-[56px] h-[calc(56px+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)]"
         style={{ background: '#EB0000', backgroundImage: 'linear-gradient(to left, #3300FC, #95008A, #EB0000)' }}>
@@ -323,8 +338,28 @@ export default function Layout() {
           <StoreSwitcher stores={stores} activeStoreId={activeStoreId} onSwitch={switchStore} />
         </div>
 
-        {/* User Menu Dropdown */}
-        <UserMenu user={user} onLogout={handleLogout} />
+        <div className="flex items-center gap-2">
+          {/* Network & System Health Status Indicator */}
+          <NetworkStatusIndicator />
+
+          {/* Dark / Light Theme Toggle Button */}
+          <button
+            onClick={toggleTheme}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 transition-all text-white cursor-pointer active:scale-95 shadow-sm"
+            title={theme === 'dark' ? 'สลับเป็นโหมดสว่าง (Light Mode)' : 'สลับเป็นโหมดมืด (Dark Mode)'}
+            aria-label="Toggle dark/light theme"
+          >
+            <span className="text-base transition-transform duration-300">
+              {theme === 'dark' ? '☀️' : '🌙'}
+            </span>
+            <span className="hidden sm:inline text-xs font-semibold select-none">
+              {theme === 'dark' ? 'โหมดสว่าง' : 'โหมดมืด'}
+            </span>
+          </button>
+
+          {/* User Menu Dropdown */}
+          <UserMenu user={user} onLogout={handleLogout} />
+        </div>
       </nav>
 
       <main className="flex-1 overflow-hidden relative">

@@ -19,11 +19,21 @@ async function migrate() {
   await db.run(`CREATE TABLE IF NOT EXISTS shifts (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, user_id TEXT NOT NULL, opening_amount REAL DEFAULT 0, closing_amount REAL, expected_amount REAL, difference REAL, status TEXT DEFAULT 'open', opened_at TEXT DEFAULT (datetime('now', '+7 hours')), closed_at TEXT)`);
   await db.run(`CREATE TABLE IF NOT EXISTS debtors (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, name TEXT NOT NULL, phone TEXT, note TEXT, created_at TEXT DEFAULT (datetime('now', '+7 hours')), updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
   await db.run(`CREATE TABLE IF NOT EXISTS store_settings (id TEXT PRIMARY KEY, store_name TEXT NOT NULL, address TEXT, phone TEXT, tax_id TEXT, vat_rate REAL DEFAULT 7.00, receipt_header TEXT, receipt_footer TEXT, logo_url TEXT, updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
+
+  await db.run(`CREATE TABLE IF NOT EXISTS purchase_orders (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, po_number TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, total_amount REAL DEFAULT 0, payment_method TEXT DEFAULT 'cash', bank_name TEXT, received_date TEXT NOT NULL, receipt_image_url TEXT NOT NULL, remark TEXT, created_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
+  await db.run(`CREATE TABLE IF NOT EXISTS purchase_order_items (id TEXT PRIMARY KEY, po_id TEXT NOT NULL, product_id TEXT NOT NULL, quantity INTEGER NOT NULL, unit_cost_price REAL NOT NULL, total_price REAL NOT NULL)`);
   
   try { await db.run("ALTER TABLE orders ADD COLUMN debtor_id TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE stores ADD COLUMN promptpay_number TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE stores ADD COLUMN promptpay_name TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE products ADD COLUMN pending_cost_price REAL"); } catch(e) {}
+  try { await db.run("ALTER TABLE products ADD COLUMN recipe_name TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE products ADD COLUMN recipe_yield REAL DEFAULT 1"); } catch(e) {}
+  try { await db.run("ALTER TABLE products ADD COLUMN portion_count REAL DEFAULT 1"); } catch(e) {}
+  try { await db.run("ALTER TABLE products ADD COLUMN portion_unit TEXT DEFAULT 'แก้ว'"); } catch(e) {}
+  try { await db.run("ALTER TABLE stock_transactions ADD COLUMN po_number TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE stock_transactions ADD COLUMN receipt_url TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE roles ADD COLUMN description TEXT"); } catch(e) {}
   
   console.log("Migration completed!");
 }

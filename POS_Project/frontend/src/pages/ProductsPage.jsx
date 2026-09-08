@@ -7,6 +7,44 @@ import ScanIcon from '../components/ScanIcon';
 
 const GRAD = 'linear-gradient(to left,#3300FC,#95008A,#EB0000)';
 
+const BASE_UNITS_LIST = [
+  { value: 'ชิ้น', label: 'ชิ้น (pcs)' },
+  { value: 'g', label: 'กรัม (g)' },
+  { value: 'ml', label: 'มิลลิลิตร (ml)' },
+  { value: 'kg', label: 'กิโลกรัม (kg)' },
+  { value: 'L', label: 'ลิตร (L)' },
+  { value: 'oz', label: 'ออนซ์ (oz)' },
+  { value: 'ถุง', label: 'ถุง (bag)' },
+  { value: 'ขวด', label: 'ขวด (bottle)' },
+  { value: 'กล่อง', label: 'กล่อง (box)' },
+  { value: 'แพ็ค', label: 'แพ็ค (pack)' },
+  { value: 'แก้ว', label: 'แก้ว (cup)' },
+  { value: 'กระป๋อง', label: 'กระป๋อง (can)' },
+  { value: 'แผ่น', label: 'แผ่น (sheet)' },
+  { value: 'ชุด', label: 'ชุด (set)' },
+];
+
+function normalizeUnitKey(unitStr) {
+  if (!unitStr) return 'ชิ้น';
+  const u = String(unitStr).trim();
+  const lower = u.toLowerCase();
+  if (['kg', 'กิโลกรัม', 'กก', 'ก.ก.', 'กิโล'].includes(lower)) return 'kg';
+  if (['g', 'กรัม', 'ก.'].includes(lower)) return 'g';
+  if (['ml', 'มิลลิลิตร', 'มล.', 'มล'].includes(lower)) return 'ml';
+  if (['l', 'ลิตร'].includes(lower)) return 'L';
+  if (['oz', 'ออนซ์'].includes(lower)) return 'oz';
+  if (['ถุง', 'bag'].includes(lower)) return 'ถุง';
+  if (['ขวด', 'bottle'].includes(lower)) return 'ขวด';
+  if (['กล่อง', 'box'].includes(lower)) return 'กล่อง';
+  if (['แพ็ค', 'pack'].includes(lower)) return 'แพ็ค';
+  if (['แก้ว', 'cup'].includes(lower)) return 'แก้ว';
+  if (['กระป๋อง', 'can'].includes(lower)) return 'กระป๋อง';
+  if (['แผ่น', 'sheet'].includes(lower)) return 'แผ่น';
+  if (['ชุด', 'set'].includes(lower)) return 'ชุด';
+  if (['ชิ้น', 'pcs', 'piece'].includes(lower)) return 'ชิ้น';
+  return u;
+}
+
 function PackCalculator({ onApply, onUnlock }) {
   const [open, setOpen] = useState(false);
   const [packs, setPacks] = useState('');
@@ -45,7 +83,7 @@ function PackCalculator({ onApply, onUnlock }) {
             : "border-red-300 text-red-700 bg-red-50 hover:bg-red-100")}
       >
         <span>{applied ? '🔒' : '📦'}</span>
-        {applied ? `ใช้ต้นทุนจากแพ็ค (฿${costPerItem.toFixed(2)}/ชิ้น)` : 'คำนวณจากแพ็ค'}
+        {applied ? `ใช้ต้นทุนจากแพ็ค (฿${costPerItem.toFixed(2)}/ชิ้น)` : 'คำนวณจากจำนวนแพ็คที่ซื้อ'}
         {!applied && <span className="text-gray-400 ml-1">{open ? '▲' : '▼'}</span>}
       </button>
 
@@ -101,18 +139,12 @@ function PackCalculator({ onApply, onUnlock }) {
             </div>
           )}
 
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setOpen(false)}
-              className="flex-1 py-2 rounded-xl border border-gray-200 text-gray-500 text-sm hover:bg-gray-50 transition-all">
-              ยกเลิก
-            </button>
-            <button type="button" onClick={handleApply}
-              disabled={costPerItem <= 0}
-              className="flex-1 py-2.5 rounded-xl text-white text-sm font-bold shadow disabled:opacity-40 hover:opacity-90 transition-all"
-              style={{ backgroundImage: GRAD }}>
-              ✅ ใช้ค่านี้ (฿{costPerItem > 0 ? costPerItem.toFixed(2) : '0.00'})
-            </button>
-          </div>
+          <button type="button" onClick={handleApply}
+            disabled={costPerItem <= 0}
+            className="w-full py-2.5 rounded-xl text-white font-bold text-sm shadow hover:opacity-90 disabled:opacity-40 transition-all"
+            style={{ backgroundColor: '#EB0000' }}>
+            นำไปใช้เป็นราคาต้นทุน (฿{costPerItem.toFixed(2)}/ชิ้น)
+          </button>
         </div>
       )}
     </div>
@@ -129,13 +161,111 @@ export default function ProductsPage() {
   const [packLocked, setPackLocked] = useState(false);
   const [form, setForm] = useState({
     sku: '', barcode: '', name: '', description: '', category_id: '',
-    cost_price: '', selling_price: '', image_url: '', is_featured: false, reorder_level: 5,
+    cost_price: '', selling_price: '', image_url: '', is_featured: false, is_raw_material: false, unit: 'ชิ้น', net_weight: 1, reorder_level: 5,
   });
+  const [packTotalPrice, setPackTotalPrice] = useState('');
+  const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryIsRaw, setNewCategoryIsRaw] = useState(false);
+  const [savingCategory, setSavingCategory] = useState(false);
+
+  const [showAddUnitModal, setShowAddUnitModal] = useState(false);
+  const [newUnitName, setNewUnitName] = useState('');
+  const [newUnitSymbol, setNewUnitSymbol] = useState('');
+  const [customUnits, setCustomUnits] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pos_custom_units');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const handleCreateUnit = (e) => {
+    e.preventDefault();
+    const name = newUnitName.trim();
+    const symbol = newUnitSymbol.trim();
+    if (!name) return toast.error('กรุณาระบุชื่อหน่วยนับ');
+
+    const unitVal = normalizeUnitKey(name);
+    const displayLabel = symbol ? `${name} (${symbol})` : name;
+
+    const newUnitObj = { value: unitVal, label: displayLabel };
+    
+    const allCurrent = [...BASE_UNITS_LIST, ...customUnits];
+    const isExisting = allCurrent.some(u => normalizeUnitKey(u.value) === unitVal);
+    if (isExisting) {
+      toast.error(`หน่วยนับ "${name}" มีอยู่ในระบบแล้ว`);
+      setForm(f => ({ ...f, unit: unitVal }));
+      setShowAddUnitModal(false);
+      return;
+    }
+
+    const updatedCustomUnits = [...customUnits, newUnitObj];
+    setCustomUnits(updatedCustomUnits);
+    try {
+      localStorage.setItem('pos_custom_units', JSON.stringify(updatedCustomUnits));
+    } catch {}
+
+    setForm(f => ({ ...f, unit: unitVal }));
+    toast.success(`เพิ่มหน่วยนับ "${displayLabel}" สำเร็จ`);
+    setNewUnitName('');
+    setNewUnitSymbol('');
+    setShowAddUnitModal(false);
+  };
+
+  const getAvailableUnits = () => {
+    const map = new Map();
+    BASE_UNITS_LIST.forEach(u => map.set(normalizeUnitKey(u.value), u));
+    customUnits.forEach(u => {
+      const normKey = normalizeUnitKey(u.value);
+      if (!map.has(normKey)) map.set(normKey, u);
+    });
+    if (form.unit) {
+      const normKey = normalizeUnitKey(form.unit);
+      if (!map.has(normKey)) {
+        map.set(normKey, { value: form.unit, label: form.unit });
+      }
+    }
+    return Array.from(map.values());
+  };
 
   useEffect(() => {
     loadProducts();
     loadCategories();
   }, []);
+
+  const handleCreateCategory = async (e) => {
+    e.preventDefault();
+    if (!newCategoryName.trim()) return toast.error('กรุณาระบุชื่อหมวดหมู่');
+    try {
+      setSavingCategory(true);
+      const res = await api.post('/categories', {
+        name: newCategoryName.trim(),
+        is_raw_material: newCategoryIsRaw ? 1 : 0
+      });
+      if (res.data.success) {
+        toast.success(`เพิ่มหมวดหมู่ "${newCategoryName}" สำเร็จ`);
+        const newCat = res.data.data;
+        await loadCategories();
+        const isRawMat = Boolean(newCategoryIsRaw || newCat.is_raw_material || newCat.name === 'วัตถุดิบ' || newCat.name.includes('วัตถุดิบ'));
+        setForm(f => ({
+          ...f,
+          category_id: newCat.id,
+          is_raw_material: isRawMat,
+          selling_price: isRawMat ? '0' : f.selling_price,
+          unit: (isRawMat && f.unit === 'ชิ้น') ? 'g' : f.unit
+        }));
+        setNewCategoryName('');
+        setNewCategoryIsRaw(false);
+        setShowAddCategoryModal(false);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.error?.message || 'เกิดข้อผิดพลาดในการสร้างหมวดหมู่');
+    } finally {
+      setSavingCategory(false);
+    }
+  };
 
   const loadProducts = async () => {
     try {
@@ -156,11 +286,23 @@ export default function ProductsPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
+      const catObj = categories.find(c => c.id === form.category_id);
+      const isRawMatCat = catObj && (catObj.name === 'วัตถุดิบ' || catObj.name.includes('วัตถุดิบ'));
+      const isRawMatFinal = Boolean(form.is_raw_material || isRawMatCat);
+
+      const payload = {
+        ...form,
+        barcode: form.barcode?.trim() || null,
+        unit: form.unit || (isRawMatFinal ? 'kg' : 'ชิ้น'),
+        net_weight: parseFloat(form.net_weight) || 1,
+        is_raw_material: isRawMatFinal ? 1 : 0,
+        selling_price: isRawMatFinal ? 0 : parseFloat(form.selling_price) || 0
+      };
       if (editingProduct) {
-        await api.put(`/products/${editingProduct.id}`, { ...form, is_active: true });
+        await api.put(`/products/${editingProduct.id}`, { ...payload, is_active: true });
         toast.success('แก้ไขสินค้าสำเร็จ');
       } else {
-        await api.post('/products', form);
+        await api.post('/products', payload);
         toast.success('เพิ่มสินค้าสำเร็จ');
       }
       setShowForm(false);
@@ -182,18 +324,24 @@ export default function ProductsPage() {
   const resetForm = async () => {
     const sku = await generateSku();
     setPackLocked(false);
+    setPackTotalPrice('');
     setForm({ sku, barcode: '', name: '', description: '', category_id: '',
-      cost_price: '', selling_price: '', image_url: '', is_featured: false, reorder_level: 5 });
+      cost_price: '', selling_price: '', image_url: '', is_featured: false, is_raw_material: false, unit: 'ชิ้น', net_weight: 1, reorder_level: 5 });
   };
 
   const editProduct = (product) => {
+    const cost = product.pending_cost_price ?? product.cost_price;
+    const netW = product.net_weight ?? 1;
+    const normalizedUnit = normalizeUnitKey(product.unit);
     setForm({
       sku: product.sku, barcode: product.barcode || '', name: product.name,
       description: product.description || '', category_id: product.category_id || '',
-      cost_price: product.pending_cost_price ?? product.cost_price, selling_price: product.selling_price,
-      image_url: product.image_url || '', is_featured: product.is_featured,
+      cost_price: cost, selling_price: product.selling_price,
+      image_url: product.image_url || '', is_featured: Boolean(product.is_featured),
+      is_raw_material: Boolean(product.is_raw_material), unit: normalizedUnit, net_weight: netW,
       reorder_level: 5, is_active: product.is_active,
     });
+    setPackTotalPrice(cost && netW > 1 ? (cost * netW).toFixed(2) : '');
     setEditingProduct(product);
     setPackLocked(false);
     setShowForm(true);
@@ -207,6 +355,36 @@ export default function ProductsPage() {
       setDeleteConfirm(null);
       loadProducts();
     } catch (err) { toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาด'); }
+  };
+
+  const handleToggleRawMaterial = async (product) => {
+    try {
+      const isCurrentlyRaw = Boolean(product.is_raw_material === 1 || product.is_raw_material === true || (product.category_name && product.category_name.includes('วัตถุดิบ')));
+      const newIsRaw = isCurrentlyRaw ? 0 : 1;
+      let newSellingPrice = product.selling_price;
+
+      if (newIsRaw === 0 && (!product.selling_price || product.selling_price <= 0)) {
+        const inputPrice = window.prompt(`ระบุราคาขายหน้าร้านสำหรับ "${product.name}" (บาท):`, '15');
+        if (inputPrice === null) return;
+        newSellingPrice = parseFloat(inputPrice) || 0;
+      }
+
+      const targetCategoryId = (newIsRaw === 0 && product.category_name && product.category_name.includes('วัตถุดิบ'))
+        ? null
+        : product.category_id;
+
+      await api.put(`/products/${product.id}`, {
+        ...product,
+        category_id: targetCategoryId,
+        is_raw_material: newIsRaw,
+        selling_price: newIsRaw === 1 ? 0 : newSellingPrice,
+        is_active: true
+      });
+      toast.success(newIsRaw === 1 ? `เปลี่ยน "${product.name}" เป็นวัตถุดิบสำเร็จ` : `เปิดขาย "${product.name}" หน้าร้านสำเร็จ (฿${newSellingPrice})`);
+      loadProducts();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะ');
+    }
   };
 
   // Deleted products drawer
@@ -291,25 +469,51 @@ export default function ProductsPage() {
               <tr key={product.id} className="border-b border-gray-50 hover:bg-gray-50">
                 <td className="py-2 px-2 text-gray-600">{product.sku}</td>
                 <td className="py-2 px-2 font-medium">
-                  {product.is_featured && <span className="text-yellow-500 mr-1">⭐</span>}
+                  {!!product.is_featured && <span className="text-yellow-500 mr-1">⭐</span>}
+                  {!!product.is_raw_material && <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-full border border-indigo-200 mr-1.5 inline-block">🧪 วัตถุดิบ</span>}
                   {product.name}
                 </td>
                 <td className="py-2 px-2 text-gray-500">{product.category_name}</td>
                 <td className="py-2 px-2 text-right text-gray-500">
                   <div className="flex flex-col items-end">
-                    <span>{formatCurrency(product.cost_price)}</span>
-                    {product.pending_cost_price !== null && product.pending_cost_price !== undefined && product.stock_quantity > 0 && (
-                      <span className="text-[10px] text-amber-600">Queued {formatCurrency(product.pending_cost_price)}</span>
+                    <span className="font-semibold text-gray-700">
+                      {formatCurrency(product.cost_price)} <span className="text-xs text-gray-400 font-normal">/ {product.unit || 'ชิ้น'}</span>
+                    </span>
+                    {product.net_weight && product.net_weight > 1 && (
+                      <span className="text-[10px] text-indigo-600 font-semibold whitespace-nowrap">
+                        (฿{(product.cost_price * product.net_weight).toFixed(2)} / แพ็ค {product.net_weight} {product.unit})
+                      </span>
                     )}
+                    {product.pending_cost_price !== null && product.pending_cost_price !== undefined && product.stock_quantity > 0 && (() => {
+                      const oldRemain = product.stock_quantity - (product.last_receive_qty || 0);
+                      return (
+                        <span className="text-[10px] text-amber-600 font-medium whitespace-nowrap">
+                          คิวถัดไป: {formatCurrency(product.pending_cost_price)} {oldRemain > 0 ? `(เหลืออีก ${oldRemain} ${product.unit || 'ชิ้น'})` : '(มีผลรายการถัดไป)'}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </td>
-                <td className="py-2 px-2 text-right font-semibold">{formatCurrency(product.selling_price)}</td>
+                <td className="py-2 px-2 text-right font-semibold">
+                  {product.is_raw_material ? <span className="text-gray-400 font-normal text-xs">ไม่ขายหน้าร้าน</span> : formatCurrency(product.selling_price)}
+                </td>
                 <td className={`py-2 px-2 text-right font-semibold ${product.stock_quantity <= 5 ? 'text-red-500' : 'text-green-600'}`}>
                   {product.stock_quantity}
                 </td>
                 <td className="py-2 px-2">
                   <div className="flex items-center gap-2">
-                    <button onClick={() => editProduct(product)} className="text-blue-600 hover:underline text-sm">
+                    <button 
+                      onClick={() => handleToggleRawMaterial(product)}
+                      title={product.is_raw_material ? "เปลี่ยนเป็นสินค้าขาย POS หน้าร้าน" : "เปลี่ยนเป็นวัตถุดิบ/ส่วนผสม"}
+                      className={"text-xs px-2 py-1 rounded-lg font-medium transition-all flex items-center gap-1 border " +
+                        (product.is_raw_material
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                          : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100")}
+                    >
+                      {product.is_raw_material ? '🛍️ เปิดขาย POS' : '🧪 เป็นวัตถุดิบ'}
+                    </button>
+                    <span className="text-gray-200">|</span>
+                    <button onClick={() => editProduct(product)} className="text-blue-600 hover:underline text-sm font-medium">
                       แก้ไข
                     </button>
                     <span className="text-gray-200">|</span>
@@ -345,7 +549,7 @@ export default function ProductsPage() {
                   <div className="flex gap-2">
                     <input 
                       value={form.barcode} 
-                      onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                      onChange={(e) => setForm(f => ({ ...f, barcode: e.target.value }))}
                       readOnly={!!editingProduct?.barcode}
                       className={"input-field flex-1 " + (editingProduct?.barcode ? "bg-gray-50 text-gray-500 cursor-not-allowed" : "")} 
                       placeholder="กรอก หรือ สแกนบาร์โค้ด" 
@@ -368,57 +572,197 @@ export default function ProductsPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">ชื่อสินค้า*</label>
-                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+                <input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
                   className="input-field" required />
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">หมวดหมู่</label>
-                <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}
-                  className="input-field">
-                  <option value="">-- เลือกหมวดหมู่ --</option>
-                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-sm font-medium mb-1">ราคาต้นทุน*</label>
-                  <div className="relative">
-                    <input type="number" step="0.01" value={form.cost_price}
-                      onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
-                      disabled={packLocked}
-                      className={"input-field pr-9 " + (packLocked ? "bg-gray-100 text-gray-500 cursor-not-allowed opacity-100" : "")}
-                      style={packLocked ? { pointerEvents: 'none' } : {}}
-                      required={!packLocked} />
-                    {packLocked && (
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-sm font-medium">หมวดหมู่*</label>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddCategoryModal(true)}
+                      className="text-xs text-indigo-600 hover:text-indigo-800 font-bold hover:underline flex items-center gap-0.5"
+                    >
+                      + เพิ่มหมวดหมู่
+                    </button>
+                  </div>
+                  <select
+                    value={form.category_id}
+                    onChange={(e) => {
+                      const selectedCatId = e.target.value;
+                      const catObj = categories.find(c => c.id === selectedCatId);
+                      const isRawMat = catObj && (catObj.name === 'วัตถุดิบ' || catObj.name.includes('วัตถุดิบ'));
+                      setForm(f => ({
+                        ...f,
+                        category_id: selectedCatId,
+                        is_raw_material: isRawMat ? true : (catObj && !isRawMat ? false : f.is_raw_material),
+                        selling_price: isRawMat ? '0' : f.selling_price,
+                        unit: (isRawMat && !editingProduct && (f.unit === 'ชิ้น' || !f.unit)) ? 'g' : f.unit
+                      }));
+                    }}
+                    className="input-field bg-white"
+                    required
+                  >
+                    <option value="">-- เลือกหมวดหมู่ --</option>
+                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-sm font-medium">หน่วยนับ</label>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddUnitModal(true)}
+                      className="text-xs text-indigo-600 hover:text-indigo-800 font-bold hover:underline flex items-center gap-0.5"
+                    >
+                      + เพิ่มหน่วยนับ
+                    </button>
+                  </div>
+                  <select
+                    value={form.unit || 'ชิ้น'}
+                    onChange={(e) => {
+                      const selectedUnit = normalizeUnitKey(e.target.value);
+                      setForm(f => ({ ...f, unit: selectedUnit }));
+                    }}
+                    className="input-field bg-white font-medium"
+                  >
+                    {getAvailableUnits().map((u) => (
+                      <option key={u.value} value={u.value}>{u.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    ปริมาณสุทธิ/น้ำหนัก <span className="text-xs font-normal text-gray-500">({form.unit || 'หน่วย'})</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0.0001"
+                    value={form.net_weight}
+                    onChange={(e) => {
+                      const netW = e.target.value;
+                      setForm(f => {
+                        const updated = { ...f, net_weight: netW };
+                        if (packTotalPrice && parseFloat(netW) > 0) {
+                          const calc = parseFloat(packTotalPrice) / parseFloat(netW);
+                          updated.cost_price = Number(calc.toFixed(4)).toString();
+                        }
+                        return updated;
+                      });
+                    }}
+                    className="input-field bg-white"
+                    placeholder="เช่น 1, 500, 1000"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* ส่วนจัดการต้นทุน & ราคารวมแพ็ค */}
+              <div className="grid grid-cols-2 gap-4 bg-slate-50/70 p-3.5 rounded-xl border border-slate-200">
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    ราคารวมยกแพ็ค (บาท) <span className="text-xs font-normal text-indigo-600">(คำนวณให้อัตโนมัติ)</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="เช่น 100 (หากซื้อยกแพ็ค)"
+                    value={packTotalPrice}
+                    onChange={(e) => {
+                      const pPrice = e.target.value;
+                      setPackTotalPrice(pPrice);
+                      const nWeight = parseFloat(form.net_weight) || 1;
+                      if (pPrice !== '' && nWeight > 0) {
+                        const calcCost = parseFloat(pPrice) / nWeight;
+                        setForm(f => ({ ...f, cost_price: Number(calcCost.toFixed(4)).toString() }));
+                      }
+                    }}
+                    disabled={packLocked || !!editingProduct}
+                    className={"input-field bg-white " + ((packLocked || editingProduct) ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "")}
+                  />
+                  <p className="text-[11px] text-gray-400 mt-1">กรอกราคารวมของทั้งถุง/แพ็ค</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    ราคาต้นทุนต่อหน่วย* <span className="text-xs font-semibold text-indigo-600 font-mono">(บาท / {form.unit || 'ชิ้น'})</span>
+                  </label>
+                  <div className="relative flex items-center">
+                    <input type="number" step="any" value={form.cost_price}
+                      onChange={(e) => {
+                        const cPrice = e.target.value;
+                        setForm(f => ({ ...f, cost_price: cPrice }));
+                        const nWeight = parseFloat(form.net_weight) || 1;
+                        if (cPrice !== '' && nWeight > 1) {
+                          const total = parseFloat(cPrice) * nWeight;
+                          setPackTotalPrice(Number(total.toFixed(2)).toString());
+                        }
+                      }}
+                      disabled={packLocked || !!editingProduct}
+                      className={"input-field bg-white pr-14 " + ((packLocked || editingProduct) ? "bg-gray-100 text-gray-500 cursor-not-allowed opacity-100" : "")}
+                      style={(packLocked || editingProduct) ? { pointerEvents: 'none' } : {}}
+                      required={!(packLocked || editingProduct)} />
+                    <span className="absolute right-3 text-xs font-bold text-slate-400 pointer-events-none">
+                      / {form.unit || 'ชิ้น'}
+                    </span>
+                    {(packLocked || editingProduct) && (
                       <>
                         <input type="hidden" name="cost_price" value={form.cost_price} required />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔒</span>
+                        <span className="absolute right-8 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔒</span>
                       </>
                     )}
                   </div>
-                  {editingProduct && editingPendingCost !== null && editingStock > 0 && (
-                    <p className="mt-1 text-xs text-sky-600">
-                      Live cost is {formatCurrency(editingCurrentCost)}. Queued cost: {formatCurrency(editingPendingCost)} when stock = 0.
-                    </p>
-                  )}
-                  {editingCostWillQueue && (
-                    <p className="mt-1 text-xs text-amber-600">New cost stays queued until the current stock reaches 0.</p>
+                  {editingProduct ? (
+                    <div className="mt-1 text-xs text-gray-500 space-y-1">
+                      <p className="text-gray-400">🔒 ต้นทุนจัดซื้อควบคุมผ่านระบบสต๊อก</p>
+                      <p>
+                        ล็อกที่ <span className="font-semibold text-gray-700">{formatCurrency(editingCurrentCost)} / {form.unit || 'ชิ้น'}</span>
+                        {editingPendingCost !== null && editingStock > 0 && (
+                          <>
+                            . ต้นทุนใหม่รอดำเนินการ: <span className="text-sky-600 font-semibold">{formatCurrency(editingPendingCost)}</span> เมื่อสต๊อกเหลือ 0
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  ) : (
+                    editingCostWillQueue && (
+                      <p className="mt-1 text-xs text-amber-600">ต้นทุนใหม่จะรอดำเนินการจนกว่าสต๊อกปัจจุบันจะหมด</p>
+                    )
                   )}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">ราคาขาย*</label>
-                  <input type="number" step="0.01" value={form.selling_price}
-                    onChange={(e) => setForm({ ...form, selling_price: e.target.value })}
-                    className="input-field" required />
-                </div>
-                <PackCalculator
-                  onApply={(cost) => { setForm(f => ({ ...f, cost_price: cost })); setPackLocked(true); }}
-                  onUnlock={() => { setPackLocked(false); setForm(f => ({ ...f, cost_price: '' })); }}
-                />
+
+                {/* Banner สรุปราคาต้นทุนต่อหน่วยอัตโนมัติ */}
+                {Boolean(form.cost_price && parseFloat(form.cost_price) > 0) && (
+                  <div className="col-span-2 p-3 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 rounded-xl space-y-1">
+                    <div className="flex justify-between items-center text-xs text-indigo-950">
+                      <span className="font-bold">🏷️ ต้นทุนคำนวณต่อ 1 {form.unit || 'หน่วย'}:</span>
+                      <span className="text-sm font-black text-indigo-700 font-mono">
+                        {formatCurrency(form.cost_price)} / {form.unit || 'หน่วย'}
+                      </span>
+                    </div>
+                    {parseFloat(form.net_weight) > 1 && (
+                      <div className="text-[11px] text-indigo-600 font-medium text-right">
+                        (จากราคารวมยกแพ็ค {formatCurrency(packTotalPrice || (parseFloat(form.cost_price) * parseFloat(form.net_weight)))} บรรจุ {form.net_weight} {form.unit})
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  ราคาขาย{form.is_raw_material ? ' (ไม่ต้องระบุสำหรับวัตถุดิบ)' : '*'}
+                </label>
+                <input type="number" step="any" value={form.is_raw_material ? '0' : form.selling_price}
+                  onChange={(e) => setForm(f => ({ ...f, selling_price: e.target.value }))}
+                  disabled={form.is_raw_material}
+                  className={"input-field " + (form.is_raw_material ? "bg-gray-100 text-gray-400 cursor-not-allowed opacity-80" : "")}
+                  required={!form.is_raw_material} />
               </div>
               <div className="flex items-center gap-2">
                 <input type="checkbox" checked={form.is_featured}
-                  onChange={(e) => setForm({ ...form, is_featured: e.target.checked })}
+                  onChange={(e) => setForm(f => ({ ...f, is_featured: e.target.checked }))}
                   id="featured" />
                 <label htmlFor="featured" className="text-sm">สินค้าแนะนำ (แสดงหน้าแรก)</label>
               </div>
@@ -426,6 +770,125 @@ export default function ProductsPage() {
                 <button type="button" onClick={() => setShowForm(false)} className="btn-ghost flex-1">ยกเลิก</button>
                 <button type="submit" className="btn-primary flex-1">
                   {editingProduct ? 'บันทึก' : 'เพิ่มสินค้า'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal เพิ่มหมวดหมู่ใหม่ */}
+      {showAddCategoryModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-800 text-base">🏷️ เพิ่มหมวดหมู่สินค้าใหม่</h3>
+              <button
+                type="button"
+                onClick={() => setShowAddCategoryModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-lg"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleCreateCategory} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">ชื่อหมวดหมู่ *</label>
+                <input
+                  type="text"
+                  placeholder="เช่น เบเกอรี่, ชาเขียว, กาแฟ, วัตถุดิบ"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  autoFocus
+                  required
+                />
+              </div>
+              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1">
+                <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-amber-900">
+                  <input
+                    type="checkbox"
+                    checked={newCategoryIsRaw}
+                    onChange={(e) => setNewCategoryIsRaw(e.target.checked)}
+                    className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span>🌾 เป็นหมวดหมู่วัตถุดิบ (Raw Material Category)</span>
+                </label>
+                <p className="text-[11px] text-amber-700 pl-6 leading-tight">
+                  สินค้าในหมวดนี้จะล็อกราคาขายเป็น ฿0 อัตโนมัติ (ไม่ต้องตั้งราคาขาย) สำหรับนำไปตัดสต๊อกและคำนวณสูตร
+                </p>
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAddCategoryModal(false)}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingCategory}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold transition-all disabled:opacity-50 shadow-md shadow-indigo-100"
+                >
+                  {savingCategory ? 'กำลังบันทึก...' : 'บันทึกหมวดหมู่'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal เพิ่มหน่วยนับใหม่ */}
+      {showAddUnitModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-800 text-base">📏 เพิ่มหน่วยนับใหม่</h3>
+              <button
+                type="button"
+                onClick={() => setShowAddUnitModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-lg"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleCreateUnit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">ชื่อหน่วยนับ (ภาษาไทย/อังกฤษ) *</label>
+                <input
+                  type="text"
+                  placeholder="เช่น ถัง, ปอนด์, ถาด, กะละมัง, cc"
+                  value={newUnitName}
+                  onChange={(e) => setNewUnitName(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  autoFocus
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">ตัวย่อ/สัญลักษณ์ภาษาอังกฤษ (ถ้ามี)</label>
+                <input
+                  type="text"
+                  placeholder="เช่น bucket, lb, tray, cc"
+                  value={newUnitSymbol}
+                  onChange={(e) => setNewUnitSymbol(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAddUnitModal(false)}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-indigo-100"
+                >
+                  บันทึกหน่วยนับ
                 </button>
               </div>
             </form>
