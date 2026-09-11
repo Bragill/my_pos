@@ -4,6 +4,7 @@ const { authenticate, authorize } = require("../middleware/auth");
 const { AppError } = require("../middleware/errorHandler");
 const { v4: uuidv4 } = require("uuid");
 const { applyPendingCostIfInventoryEmpty } = require("./_productCost");
+const batchService = require("../services/batchService");
 const router = express.Router();
 
 router.post("/", authenticate, async (req, res, next) => {
@@ -81,6 +82,7 @@ router.post("/", authenticate, async (req, res, next) => {
       await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id) VALUES (?,?,?,'sale',?,?,?)", [uuidv4(), item.product_id, req.user.id, -item.quantity, (is_outstanding ? "Outstanding - " : "Sale - ") + orderNo, req.store_id]);
       const invAfter = await db.get("SELECT quantity FROM inventory WHERE product_id=? AND store_id=?", [item.product_id, req.store_id]);
       await applyPendingCostIfInventoryEmpty(item.product_id, req.store_id, invAfter ? invAfter.quantity : 0, req.user.id);
+      await batchService.deductFromBatches(item.product_id, req.store_id, item.quantity);
 
 function getUnitFactor(unitStr) {
   if (!unitStr) return 1;
@@ -94,7 +96,7 @@ function getUnitFactor(unitStr) {
 }
 
       // Deduct recipe ingredients stock if product has a recipe
-      const recipeItems = await db.all("SELECT ingredient_id, quantity, unit FROM recipes WHERE product_id=? AND (store_id=? OR store_id IS NULL OR store_id='store-1')", [item.product_id, req.store_id]);
+      const recipeItems = await db.all("SELECT ingredient_id, quantity, unit FROM recipes WHERE product_id=? AND (store_id=? OR store_id IS NULL OR store_id='')", [item.product_id, req.store_id]);
       for (const rItem of recipeItems) {
         const ing = await db.get("SELECT unit FROM ingredients WHERE id=?", [rItem.ingredient_id]);
         let multiplier = 1;

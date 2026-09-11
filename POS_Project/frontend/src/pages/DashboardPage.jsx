@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, useMemo, Fragment } from 'react';
 import {
   ResponsiveContainer,
   BarChart, Bar,
@@ -8,6 +8,8 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from 'recharts';
 import { formatCurrency, formatShortDate } from '../utils/format';
+import Pagination from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import toast from 'react-hot-toast';
@@ -39,7 +41,7 @@ const fmtK = (v) => {
   return `฿${v}`;
 };
 
-function SalesChart() {
+function SalesChart({ refreshToken = 0 }) {
   const [chartType, setChartType] = useState('pie');
   const [activeMetrics, setActiveMetrics] = useState(['revenue', 'cost', 'profit']);
   const [period, setPeriod] = useState('week');
@@ -112,7 +114,7 @@ function SalesChart() {
       finally { setLoading(false); }
     };
     load();
-  }, [period, selMonth, selYear]);
+  }, [period, selMonth, selYear, refreshToken]);
 
   const visibleMetrics = METRICS.filter(m => activeMetrics.includes(m.key));
   const pieData = visibleMetrics.map(m => ({
@@ -290,6 +292,41 @@ export default function DashboardPage() {
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
+  // Manual refresh only — this page never auto-refreshes.
+  // Bumping refreshToken reloads SalesChart + ProfitSection without losing their tab/filter state.
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // ProfitSection is defined below inside this component, so its type identity
+  // would change on every parent re-render (auth 30s refresh, network 20s
+  // heartbeat), remounting the section and refetching month-detail in a loop.
+  // Memoizing the element keeps a stable type, so it only remounts when
+  // refreshToken actually changes (manual refresh button).
+  const profitSectionEl = useMemo(
+    () => <ProfitSection refreshToken={refreshToken} />,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [refreshToken]
+  );
+
+  const refreshAll = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setLoading(true);
+    try {
+      await loadDashboard();
+      if (selectedDate) await handleDayClick(selectedDate);
+      setRefreshToken(t => t + 1);
+      toast.success('รีเฟรชข้อมูลแดชบอร์ดแล้ว');
+    } catch {
+      toast.error('รีเฟรชข้อมูลไม่สำเร็จ');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Day-orders table pagination (page resets when another day is selected)
+  const dayOrdersPaging = usePagination(dayOrders, 10, selectedDate?.date || '');
+
   useEffect(() => { loadDashboard(); }, []);
 
   const loadDashboard = async () => {
@@ -412,7 +449,7 @@ export default function DashboardPage() {
   /* ────────────────────────────────── */
   /*  Profit/Cost sub-component         */
   /* ────────────────────────────────── */
-  function ProfitSection() {
+  function ProfitSection({ refreshToken = 0 }) {
     const THAI_MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
     const now = new Date();
     const thisYear = now.getFullYear();
@@ -475,10 +512,10 @@ export default function DashboardPage() {
       } catch {}
     };
 
-    useEffect(() => {
-      if (mode === 'month') loadMonth(selMonth);
-      else loadYear(selYear);
-    }, [mode, selMonth, selYear]);
+  useEffect(() => {
+    if (mode === 'month') loadMonth(selMonth);
+    else loadYear(selYear);
+  }, [mode, selMonth, selYear, refreshToken]);
 
     const loadMonth = async (month) => {
       setBusy(true); setDetail(null);
@@ -494,10 +531,10 @@ export default function DashboardPage() {
       finally { setBusy(false); }
     };
 
-    const StatCard = ({ title, value, icon, color }) => (
+    const StatCard = ({ title, value, icon, color, darkColor }) => (
       <div className="rounded-2xl px-4 py-3 relative overflow-hidden" style={{ background: `${color}12` }}>
         <p className="text-xs text-gray-500">{title}</p>
-        <p className="text-lg font-bold mt-0.5" style={{ color }}>{value}</p>
+        <p className="stat-value text-lg font-bold mt-0.5" style={{ '--sc': color, '--sc-dark': darkColor }}>{value}</p>
         <span className="absolute top-2 right-3 text-xl opacity-20">{icon}</span>
       </div>
     );
@@ -505,12 +542,12 @@ export default function DashboardPage() {
     const renderRows = (rows, totals) => (
       <>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <StatCard title="รายได้รวม"  value={formatCurrency(totals.revenue)} icon="💰" color="#3300FC" />
-          <StatCard title="ต้นทุนรวม" value={formatCurrency(totals.cost)}    icon="📦" color="#95008A" />
+          <StatCard title="รายได้รวม"  value={formatCurrency(totals.revenue)} icon="💰" color="#3300FC" darkColor="#818CF8" />
+          <StatCard title="ต้นทุนรวม" value={formatCurrency(totals.cost)}    icon="📦" color="#95008A" darkColor="#E879F9" />
           <StatCard title={totals.profit >= 0 ? 'กำไรสุทธิ' : 'ขาดทุน'}
             value={formatCurrency(Math.abs(totals.profit))} icon={totals.profit >= 0 ? '📈' : '📉'}
-            color={totals.profit >= 0 ? '#16a34a' : '#EB0000'} />
-          <StatCard title="จำนวนบิล"  value={`${totals.total_orders} บิล`} icon="🧾" color="#6b7280" />
+            color={totals.profit >= 0 ? '#16a34a' : '#EB0000'} darkColor={totals.profit >= 0 ? '#4ADE80' : '#F87171'} />
+          <StatCard title="จำนวนบิล"  value={`${totals.total_orders} บิล`} icon="🧾" color="#6b7280" darkColor="#CBD5E1" />
         </div>
 
         {rows.length === 0
@@ -544,9 +581,9 @@ export default function DashboardPage() {
                           </td>
                           <td className="py-2.5 pr-3 text-right text-gray-500">{row.total_orders}</td>
                           <td className="py-2.5 pr-3 text-right font-medium text-gray-800">{formatCurrency(row.revenue)}</td>
-                          <td className="py-2.5 pr-3 text-right" style={{ color:'#95008A' }}>{formatCurrency(row.cost)}</td>
+                          <td className="py-2.5 pr-3 text-right font-medium t-cost">{formatCurrency(row.cost)}</td>
                           <td className="py-2.5 text-right">
-                            <span className="font-bold" style={{ color: isProfit ? '#16a34a' : '#EB0000' }}>
+                            <span className={"font-bold " + (isProfit ? 't-profit' : 't-loss')}>
                               {isProfit ? '' : '-'}{formatCurrency(Math.abs(row.profit))}
                             </span>
                             <span className="text-xs text-gray-400 ml-1">({pct}%)</span>
@@ -584,7 +621,7 @@ export default function DashboardPage() {
                                                         onClick={() => toggleOrderDetail2(order)}>
                                                         <div>
                                                           <div className="flex items-center gap-1.5">
-                                                            <span className="text-xs font-mono font-semibold" style={{color:'#3300FC'}}>{order.order_no}</span>
+                                                            <span className="text-xs font-mono font-semibold t-revenue">{order.order_no}</span>
                                                             <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${order.status==='completed'?'bg-green-100 text-green-700':order.status==='outstanding'||order.status==='รอชำระพร้อมเพย์'?'bg-amber-100 text-amber-700':'bg-red-100 text-red-600'}`}>
                                                               {order.status==='completed'?'ชำระแล้ว':order.status==='outstanding'||order.status==='รอชำระพร้อมเพย์'?'ค้างชำระ':'ยกเลิกแล้ว'}
                                                             </span>
@@ -683,8 +720,8 @@ export default function DashboardPage() {
                     <td className="pt-2.5 pr-3 text-gray-700">รวม</td>
                     <td className="pt-2.5 pr-3 text-right text-gray-600">{totals.total_orders}</td>
                     <td className="pt-2.5 pr-3 text-right text-gray-800">{formatCurrency(totals.revenue)}</td>
-                    <td className="pt-2.5 pr-3 text-right" style={{ color:'#95008A' }}>{formatCurrency(totals.cost)}</td>
-                    <td className="pt-2.5 text-right" style={{ color: totals.profit >= 0 ? '#16a34a' : '#EB0000' }}>
+                    <td className="pt-2.5 pr-3 text-right t-cost">{formatCurrency(totals.cost)}</td>
+                    <td className={"pt-2.5 text-right font-bold " + (totals.profit >= 0 ? 't-profit' : 't-loss')}>
                       {formatCurrency(totals.profit)}
                     </td>
                   </tr>
@@ -702,7 +739,7 @@ export default function DashboardPage() {
           <h3 className="font-bold text-gray-700">💹 ต้นทุน / กำไร / ขาดทุน</h3>
           <div className="flex items-center gap-2">
             {/* Mode toggle */}
-            <div className="flex bg-gray-100 rounded-xl p-0.5 text-xs font-semibold">
+            <div className="flex bg-gray-100 dark:bg-slate-800 rounded-xl p-0.5 text-xs font-semibold">
               {[['month','รายเดือน'],['year','รายปี']].map(([v,l]) => (
                 <button key={v} onClick={() => setMode(v)}
                   className={'px-3 py-1.5 rounded-lg transition-all ' + (mode===v ? 'bg-white text-purple-700 shadow' : 'text-gray-500 hover:text-gray-700')}>
@@ -736,7 +773,19 @@ export default function DashboardPage() {
 
   return (
     <div className="p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)]">
-      <h1 className="text-2xl font-bold text-gray-800 mb-5">📊 แดชบอร์ด</h1>
+      <div className="flex items-center justify-between mb-5">
+        <h1 className="text-2xl font-bold text-gray-800">📊 แดชบอร์ด</h1>
+        <button
+          type="button"
+          onClick={refreshAll}
+          disabled={refreshing}
+          title="รีเฟรชข้อมูลทั้งหมด"
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-gray-200 text-gray-700 text-sm font-bold shadow-sm hover:bg-gray-50 active:scale-95 transition-all disabled:opacity-50"
+        >
+          <span className={refreshing ? 'animate-spin inline-block' : 'inline-block'}>🔄</span>
+          {refreshing ? 'กำลังรีเฟรช...' : 'รีเฟรชข้อมูล'}
+        </button>
+      </div>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -752,17 +801,14 @@ export default function DashboardPage() {
             <p className="text-xs text-gray-500 font-medium">{c.title}</p>
             <p className="text-2xl font-bold mt-1 text-gray-800">{c.value}</p>
             {c.sub && <p className="text-xs text-gray-400 mt-0.5">{c.sub}</p>}
-            {c.onClick && <p className="text-xs mt-1" style={{color:'#95008A'}}>คลิกเพื่อดูรายละเอียด</p>}
+            {c.onClick && <p className="text-xs mt-1 text-fuchsia-700 dark:text-fuchsia-400">คลิกเพื่อดูรายละเอียด</p>}
             <span className="absolute top-3 right-4 text-2xl opacity-20">{c.icon}</span>
           </div>
         ))}
       </div>
 
-      {/* ── Chart ── */}
-      <SalesChart />
-
       {/* ── ต้นทุน / กำไร / ขาดทุน ── */}
-      <ProfitSection />
+      {profitSectionEl}
 
       <div className="grid md:grid-cols-2 gap-5 mt-5">
         {/* ยอดขายรายวัน */}
@@ -833,7 +879,7 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {dayOrders.map((order) => (
+                  {dayOrdersPaging.paged.map((order) => (
                     <tr key={order.id} onClick={() => handleOrderClick(order)}
                       className="cursor-pointer border-b border-gray-50 hover:bg-purple-50 transition-colors"
                       style={selectedOrder?.id === order.id ? { background: 'rgba(147,51,234,0.08)' } : {}}>
@@ -847,10 +893,25 @@ export default function DashboardPage() {
                 </tbody>
               </table>
               {dayOrders.length === 0 && <p className="text-center text-gray-400 py-6 text-sm">ไม่พบรายการ</p>}
+              <Pagination
+                page={dayOrdersPaging.page}
+                totalPages={dayOrdersPaging.totalPages}
+                perPage={dayOrdersPaging.perPage}
+                onPageChange={dayOrdersPaging.setPage}
+                onPerPageChange={dayOrdersPaging.setPerPage}
+                rangeStart={dayOrdersPaging.rangeStart}
+                rangeEnd={dayOrdersPaging.rangeEnd}
+                total={dayOrdersPaging.total}
+              />
             </div>
           )}
         </div>
       )}
+
+      {/* ── Chart (moved to bottom) ── */}
+      <div className="mt-5">
+        <SalesChart refreshToken={refreshToken} />
+      </div>
 
       {/* Order Detail Modal */}
       {selectedOrder && (

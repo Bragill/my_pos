@@ -14,6 +14,13 @@ export function formatNumber(num) {
   return new Intl.NumberFormat('th-TH').format(num);
 }
 
+// Stock quantity: integers shown cleanly (4, not 4.00),
+// fractional values trimmed to max 2 decimals (59.5500...04 -> 59.55)
+export function formatQty(qty) {
+  const num = Number(qty) || 0;
+  return num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
 export function formatDate(dateString) {
   return new Intl.DateTimeFormat('th-TH', {
     year: 'numeric',

@@ -6,12 +6,8 @@ const { AppError } = require("../middleware/errorHandler");
 const { authenticate } = require("../middleware/auth");
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET && process.env.NODE_ENV === 'production') {
-  console.error("FATAL ERROR: JWT_SECRET is not defined in environment variables.");
-  process.exit(1);
-}
-const DEFAULT_SECRET = JWT_SECRET || "pos_secret_key_dev_only";
+const getJwtSecret = () => process.env.JWT_SECRET || "pos_secret_key_dev_only";
+
 
 router.post("/login", async (req, res, next) => {
   try {
@@ -42,7 +38,7 @@ router.post("/login", async (req, res, next) => {
 
     const token = jwt.sign(
       { id: user.id, username: user.username, role: user.role_name, permissions: parsedPerms }, 
-      DEFAULT_SECRET, 
+      getJwtSecret(), 
       { expiresIn: process.env.JWT_EXPIRES_IN || "8h" }
     );
 
@@ -88,7 +84,7 @@ router.post("/pin-login", async (req, res, next) => {
 
     const token = jwt.sign(
       { id: matchedUser.id, username: matchedUser.username, role: matchedUser.role_name, permissions: parsedPerms }, 
-      DEFAULT_SECRET, 
+      getJwtSecret(), 
       { expiresIn: process.env.JWT_EXPIRES_IN || "8h" }
     );
 

@@ -1,5 +1,7 @@
 ﻿import { useState, useEffect } from "react";
 import { formatCurrency } from "../utils/format";
+import Pagination from "../components/Pagination";
+import { usePagination } from "../hooks/usePagination";
 import api from "../services/api";
 import toast from "react-hot-toast";
 
@@ -153,6 +155,15 @@ export default function CustomersPage() {
   const filteredDebtors = debtors.filter(d =>
     !search || d.name.toLowerCase().includes(search.toLowerCase()) || (d.phone||"").includes(search)
   );
+  const filteredPayments = paymentHistory.filter(p =>
+    !search || p.order_no.includes(search) || p.debtor_name?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  // Card-list pagination (page resets on new search / tab / month)
+  const listResetKey = search + '|' + tab + '|' + filterMonth;
+  const ordersPaging = usePagination(filteredOrders, 10, listResetKey);
+  const debtorsPaging = usePagination(filteredDebtors, 10, listResetKey);
+  const paymentsPaging = usePagination(filteredPayments, 10, listResetKey);
 
   return (
     <div className="p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)]">
@@ -217,7 +228,7 @@ export default function CustomersPage() {
           filteredOrders.length === 0
             ? <div className="card text-center py-16"><p className="text-4xl mb-3">✅</p><p className="text-gray-500 font-medium">ไม่มีรายการค้างชำระ</p></div>
             : <div className="space-y-3">
-                {filteredOrders.map(order => (
+                {ordersPaging.paged.map(order => (
                   <div key={order.id} className="card hover:shadow-md transition-all">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
@@ -251,6 +262,16 @@ export default function CustomersPage() {
                     </div>
                   </div>
                 ))}
+                <Pagination
+                  page={ordersPaging.page}
+                  totalPages={ordersPaging.totalPages}
+                  perPage={ordersPaging.perPage}
+                  onPageChange={ordersPaging.setPage}
+                  onPerPageChange={ordersPaging.setPerPage}
+                  rangeStart={ordersPaging.rangeStart}
+                  rangeEnd={ordersPaging.rangeEnd}
+                  total={ordersPaging.total}
+                />
               </div>
         )}
 
@@ -263,7 +284,7 @@ export default function CustomersPage() {
                 <button onClick={openNewDebtor} className="btn-primary mt-4 !py-2 !px-5 text-sm">➕ เพิ่มลูกหนี้</button>
               </div>
             : <div className="space-y-3">
-                {filteredDebtors.map(d => (
+                {debtorsPaging.paged.map(d => (
                   <div key={d.id} className="card hover:shadow-md transition-all">
                     <div className="flex items-center gap-3">
                       {/* Avatar */}
@@ -313,6 +334,16 @@ export default function CustomersPage() {
                     </div>
                   </div>
                 ))}
+                <Pagination
+                  page={debtorsPaging.page}
+                  totalPages={debtorsPaging.totalPages}
+                  perPage={debtorsPaging.perPage}
+                  onPageChange={debtorsPaging.setPage}
+                  onPerPageChange={debtorsPaging.setPerPage}
+                  rangeStart={debtorsPaging.rangeStart}
+                  rangeEnd={debtorsPaging.rangeEnd}
+                  total={debtorsPaging.total}
+                />
               </div>
         )}
 
@@ -321,7 +352,7 @@ export default function CustomersPage() {
           paymentHistory.length === 0
             ? <div className="card text-center py-16"><p className="text-4xl mb-3">🕒</p><p className="text-gray-500 font-medium">ไม่มีประวัติการชำระเงิน</p></div>
             : <div className="space-y-3">
-                {paymentHistory.filter(p => !search || p.order_no.includes(search) || p.debtor_name?.toLowerCase().includes(search.toLowerCase())).map(p => (
+                {paymentsPaging.paged.map(p => (
                   <div key={p.id} className="card hover:shadow-md transition-all">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex-1 min-w-0">
@@ -346,6 +377,16 @@ export default function CustomersPage() {
                     </div>
                   </div>
                 ))}
+                <Pagination
+                  page={paymentsPaging.page}
+                  totalPages={paymentsPaging.totalPages}
+                  perPage={paymentsPaging.perPage}
+                  onPageChange={paymentsPaging.setPage}
+                  onPerPageChange={paymentsPaging.setPerPage}
+                  rangeStart={paymentsPaging.rangeStart}
+                  rangeEnd={paymentsPaging.rangeEnd}
+                  total={paymentsPaging.total}
+                />
               </div>
         )}
       </>)}

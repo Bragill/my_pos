@@ -49,4 +49,10 @@ export const recipesAPI = {
   deleteMasterRecipe: (id) => api.delete(`/recipes/master/${id}`),
 };
 
+// Batch / expiry-tracking API methods
+export const batchesAPI = {
+  getAll: (params) => api.get('/inventory/batches', { params }),
+  writeOff: (id, data) => api.post(`/inventory/batches/${id}/writeoff`, data),
+};
+
 export default api;

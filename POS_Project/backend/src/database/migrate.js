@@ -22,6 +22,9 @@ async function migrate() {
 
   await db.run(`CREATE TABLE IF NOT EXISTS purchase_orders (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, po_number TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, total_amount REAL DEFAULT 0, payment_method TEXT DEFAULT 'cash', bank_name TEXT, received_date TEXT NOT NULL, receipt_image_url TEXT NOT NULL, remark TEXT, created_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
   await db.run(`CREATE TABLE IF NOT EXISTS purchase_order_items (id TEXT PRIMARY KEY, po_id TEXT NOT NULL, product_id TEXT NOT NULL, quantity INTEGER NOT NULL, unit_cost_price REAL NOT NULL, total_price REAL NOT NULL)`);
+
+  await db.run(`CREATE TABLE IF NOT EXISTS work_orders (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, wo_number TEXT NOT NULL UNIQUE, product_id TEXT NOT NULL, product_name TEXT NOT NULL, batch_count REAL NOT NULL DEFAULT 1, produced_yield REAL NOT NULL DEFAULT 0, yield_unit TEXT NOT NULL, total_cost REAL DEFAULT 0, user_id TEXT NOT NULL, user_name TEXT, remark TEXT, created_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
+  await db.run(`CREATE TABLE IF NOT EXISTS work_order_items (id TEXT PRIMARY KEY, wo_id TEXT NOT NULL, ingredient_id TEXT NOT NULL, ingredient_name TEXT NOT NULL, quantity REAL NOT NULL, unit TEXT NOT NULL, cost REAL DEFAULT 0)`);
   
   try { await db.run("ALTER TABLE orders ADD COLUMN debtor_id TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE stores ADD COLUMN promptpay_number TEXT"); } catch(e) {}
@@ -32,7 +35,12 @@ async function migrate() {
   try { await db.run("ALTER TABLE products ADD COLUMN portion_count REAL DEFAULT 1"); } catch(e) {}
   try { await db.run("ALTER TABLE products ADD COLUMN portion_unit TEXT DEFAULT 'แก้ว'"); } catch(e) {}
   try { await db.run("ALTER TABLE stock_transactions ADD COLUMN po_number TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE stock_transactions ADD COLUMN gr_number TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE stock_transactions ADD COLUMN gi_number TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE stock_transactions ADD COLUMN receipt_url TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE ingredient_stock_transactions ADD COLUMN gr_number TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE ingredient_stock_transactions ADD COLUMN gi_number TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE ingredient_stock_transactions ADD COLUMN po_number TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE roles ADD COLUMN description TEXT"); } catch(e) {}
   
   console.log("Migration completed!");

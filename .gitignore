@@ -26,3 +26,12 @@ ngrok.exe
 .env.*
 !.env.example
 dev-dist/
+graphify-out/
+headroom
+hermes_err.txt
+hermes_out.txt
+rtk
+.config/
+opencode.json
+ponytail/
+.agents/

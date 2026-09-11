@@ -1,11 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 
-const logFile = path.join(__dirname, '../../error.log');
+const logFile = typeof __dirname !== 'undefined' ? path.join(__dirname, '../../error.log') : null;
 
 const errorHandler = (err, req, res, next) => {
   const errorLog = `[${new Date().toISOString()}] ${req.method} ${req.url}\nError: ${err.message}\nStack: ${err.stack}\n\n`;
-  fs.appendFileSync(logFile, errorLog);
+  if (logFile && typeof fs.appendFileSync === 'function') {
+    try {
+      fs.appendFileSync(logFile, errorLog);
+    } catch (_) {}
+  }
   
   console.error("API Error:", err);
   if (err.stack) console.error(err.stack);

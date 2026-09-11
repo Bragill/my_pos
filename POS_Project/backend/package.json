@@ -8,7 +8,10 @@
     "start": "node src/server.js",
     "db:migrate": "node src/database/migrate.js",
     "db:seed": "node src/database/seed.js",
-    "mcp:start": "node src/ai_tools/mcpServer.js"
+    "mcp:start": "node src/ai_tools/mcpServer.js",
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy",
+    "worker:dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1033.0",
@@ -26,12 +29,14 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
+    "node-cron": "^4.6.0",
     "pg": "^8.20.0",
     "sharp": "^0.34.5",
     "sql.js": "^1.10.3",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.0"
+    "nodemon": "^3.1.0",
+    "wrangler": "^4.131.0"
   }
 }

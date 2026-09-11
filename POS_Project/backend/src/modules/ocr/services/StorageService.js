@@ -1,7 +1,7 @@
 const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { v4: uuidv4 } = require('uuid');
-const sharp = require('sharp');
+const { getWorkerBindings } = require('../../../database/dbHelper');
 
 class StorageService {
     constructor() {
@@ -17,11 +17,25 @@ class StorageService {
     }
 
     async uploadImage(buffer, mimetype = 'image/jpeg') {
-        const fs = require('fs');
-        const path = require('path');
         const filename = `${uuidv4()}.jpeg`;
         const key = `receipts/${filename}`;
+        const domain = process.env.R2_PUBLIC_DOMAIN || '';
 
+        // 1. Edge Mode: Native Cloudflare R2 bucket binding
+        const r2Binding = getWorkerBindings()?.R2_BUCKET;
+        if (r2Binding) {
+            try {
+                await r2Binding.put(key, buffer, {
+                    httpMetadata: { contentType: mimetype }
+                });
+                const url = domain ? `${domain}/${key}` : `/${key}`;
+                return { key, url };
+            } catch (err) {
+                console.error('[R2 Binding Error] Upload failed:', err.message);
+            }
+        }
+
+        // 2. Node.js S3 Client Mode
         if (process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_BUCKET_NAME) {
             try {
                 const command = new PutObjectCommand({
@@ -31,7 +45,6 @@ class StorageService {
                     ContentType: mimetype,
                 });
                 await this.client.send(command);
-                const domain = process.env.R2_PUBLIC_DOMAIN || '';
                 const url = domain ? `${domain}/${key}` : `/${key}`;
                 return { key, url };
             } catch (error) {
@@ -39,22 +52,44 @@ class StorageService {
             }
         }
 
-        // Local fallback
-        const uploadDir = path.join(__dirname, '../../../../uploads/receipts');
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
-        }
-        const localPath = path.join(uploadDir, filename);
-        fs.writeFileSync(localPath, buffer);
+        // 3. Local filesystem fallback for Node.js
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            if (typeof __dirname !== 'undefined') {
+                const uploadDir = path.join(__dirname, '../../../../uploads/receipts');
+                if (!fs.existsSync(uploadDir)) {
+                    fs.mkdirSync(uploadDir, { recursive: true });
+                }
+                const localPath = path.join(uploadDir, filename);
+                fs.writeFileSync(localPath, buffer);
 
-        return {
-            key,
-            url: `/uploads/receipts/${filename}`
-        };
+                return {
+                    key,
+                    url: `/uploads/receipts/${filename}`
+                };
+            }
+        } catch (e) {
+            console.warn('Local file fallback failed:', e.message);
+            return { key, url: `/${key}` };
+        }
     }
 
     async deleteImage(key) {
         if (!key) return;
+
+        // 1. Edge Mode
+        const r2Binding = getWorkerBindings()?.R2_BUCKET;
+        if (r2Binding) {
+            try {
+                await r2Binding.delete(key);
+                return;
+            } catch (err) {
+                console.error('[R2 Binding Delete Error]:', err.message);
+            }
+        }
+
+        // 2. S3 API Mode
         try {
             const command = new DeleteObjectCommand({
                 Bucket: this.bucket,
@@ -62,8 +97,7 @@ class StorageService {
             });
             await this.client.send(command);
         } catch (error) {
-            console.error(`Failed to delete image from R2: ${key}`, error);
-            // We don't throw here to avoid failing the DB deletion if R2 fails
+            console.error(`Failed to delete image from R2: ${key}`, error.message);
         }
     }
 

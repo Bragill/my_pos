@@ -1,0 +1,33 @@
+{
+  "name": "POS System",
+  "short_name": "POS",
+  "description": "ระบบขายหน้าร้าน (Point of Sale) — ขาย, สต็อก, สูตรอาหาร และรายงาน",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#EB0000",
+  "background_color": "#ffffff",
+  "categories": ["business", "shopping", "food"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

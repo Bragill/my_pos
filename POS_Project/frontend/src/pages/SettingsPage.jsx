@@ -3,8 +3,10 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { canViewModule, canMaintainModule } from '../utils/permissions';
+import Pagination from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
-const ROLE_LABELS = { admin: '👑 แอดมิน', manager: '📊 ผู้จัดการ', cashier: '🛒 แคชเชียร์' };
+const ROLE_LABELS = { admin: 'แอดมิน', manager: 'ผู้จัดการ', cashier: 'แคชเชียร์' };
 
 const MODULE_PERMISSIONS = [
   { key: 'pos', label: '🛒 การขาย POS', desc: 'เข้าใช้งานระบบบันทึกขายหน้าร้าน' },
@@ -551,6 +553,194 @@ function CategoryModal({ category, onClose, onSaved }) {
   );
 }
 
+function CategoryStockModal({ category, onClose }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    const fetchStock = async () => {
+      setLoading(true);
+      try {
+        const res = await api.get(`/categories/${category.id}/stock`);
+        setItems(res.data.data || []);
+      } catch (err) {
+        try {
+          const fallback = await api.get(`/inventory?category_id=${category.id}`);
+          setItems(fallback.data.data || []);
+        } catch {
+          toast.error('ไม่สามารถโหลดข้อมูลสต๊อกสินค้าได้');
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (category?.id) fetchStock();
+  }, [category?.id]);
+
+  const filteredItems = items.filter(item => {
+    if (!search.trim()) return true;
+    const term = search.toLowerCase();
+    return (
+      item.name?.toLowerCase().includes(term) ||
+      item.sku?.toLowerCase().includes(term) ||
+      item.barcode?.toLowerCase().includes(term)
+    );
+  });
+
+  const totalQty = items.reduce((acc, i) => acc + (parseFloat(i.quantity) || 0), 0);
+  const totalValuation = items.reduce((acc, i) => acc + ((parseFloat(i.quantity) || 0) * (parseFloat(i.cost_price) || 0)), 0);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 text-gray-900 dark:text-slate-100 rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden animate-scale-up">
+        {/* Header */}
+        <div className="p-5 border-b border-gray-100 dark:border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🏷️</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-lg text-gray-800 dark:text-slate-100">
+                  สต๊อกสินค้าในหมวด: <span className="text-indigo-600 dark:text-indigo-400">{category.name}</span>
+                </h3>
+                {category.is_raw_material && (
+                  <span className="text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 font-bold px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800">
+                    🌾 วัตถุดิบสต๊อก
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-gray-400 dark:text-slate-400 mt-0.5">
+                {category.description || 'รายการสินค้าคงคลังและราคาในหมวดนี้'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-gray-100 dark:hover:bg-slate-800 text-gray-400 hover:text-gray-600 dark:hover:text-slate-200 text-lg font-bold cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Search Bar */}
+        <div className="p-4 bg-gray-50/70 dark:bg-slate-800/40 border-b border-gray-100 dark:border-slate-800">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="🔍 ค้นหาชื่อสินค้า, SKU, บาร์โค้ด ในหมวดนี้..."
+            className="w-full py-2 px-3.5 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 text-gray-800 dark:text-slate-100"
+          />
+        </div>
+
+        {/* Content Body */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {loading ? (
+            <div className="py-16 text-center text-gray-400">
+              <span className="animate-spin text-3xl inline-block mb-2">⏳</span>
+              <p className="text-xs">กำลังโหลดรายการสินค้าคงเหลือ...</p>
+            </div>
+          ) : filteredItems.length === 0 ? (
+            <div className="py-16 text-center text-gray-400 dark:text-slate-500">
+              <span className="text-4xl inline-block mb-2">📦</span>
+              <p className="text-sm font-medium">
+                {search ? 'ไม่พบสินค้าที่ตรงกับการค้นหา' : 'ยังไม่มีสินค้าผูกกับหมวดหมู่นี้'}
+              </p>
+              <p className="text-xs mt-1 text-gray-400">
+                คุณสามารถเลือกหมวดหมู่นี้ตอนสร้างหรือแก้ไขสินค้าในหน้า "รายการสินค้า" ได้
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-100 dark:divide-slate-800/80">
+              {filteredItems.map((item) => {
+                const qty = parseFloat(item.quantity) || 0;
+                const reorder = parseFloat(item.reorder_level) || 5;
+                const isOutOfStock = qty <= 0;
+                const isLowStock = !isOutOfStock && qty <= reorder;
+
+                return (
+                  <div
+                    key={item.id}
+                    className="py-3 px-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-gray-50/80 dark:hover:bg-slate-800/50 rounded-xl transition-colors"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">{item.is_raw_material ? '🌾' : '📦'}</span>
+                        <h4 className="font-bold text-sm text-gray-800 dark:text-slate-100 truncate">
+                          {item.name}
+                        </h4>
+                        {item.is_raw_material ? (
+                          <span className="text-[10px] bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded font-bold border border-amber-200 dark:border-amber-800/60">
+                            วัตถุดิบ
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-gray-400 dark:text-slate-400">
+                        {item.sku && <span>SKU: <strong className="text-gray-600 dark:text-slate-300 font-mono">{item.sku}</strong></span>}
+                        {item.barcode && <span>Barcode: <strong className="text-gray-600 dark:text-slate-300 font-mono">{item.barcode}</strong></span>}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0">
+                      {/* Price & Cost */}
+                      <div className="text-right">
+                        <p className="text-xs text-gray-500 dark:text-slate-400">
+                          ทุน: <span className="font-bold text-gray-700 dark:text-slate-200 font-mono">฿{parseFloat(item.cost_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </p>
+                        {!item.is_raw_material && (
+                          <p className="text-xs text-gray-500 dark:text-slate-400">
+                            ขาย: <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono">฿{parseFloat(item.selling_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Stock Quantity Badge */}
+                      <div className="text-right min-w-[90px]">
+                        <div
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold ${
+                            isOutOfStock
+                              ? 'bg-red-100 dark:bg-red-950/80 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800'
+                              : isLowStock
+                              ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                              : 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                          }`}
+                        >
+                          <span>{isOutOfStock ? '🔴' : isLowStock ? '🟡' : '🟢'}</span>
+                          <span>{qty} {item.unit || 'ชิ้น'}</span>
+                        </div>
+                        <p className="text-[10px] text-gray-400 mt-0.5">
+                          เตือนต่ำ: {reorder} {item.unit || 'ชิ้น'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Footer Summary */}
+        {!loading && items.length > 0 && (
+          <div className="p-4 bg-gray-50 dark:bg-slate-800/60 border-t border-gray-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-4 text-gray-600 dark:text-slate-300 font-medium">
+              <span>รวมสินค้า: <strong>{items.length}</strong> รายการ</span>
+              <span>สต๊อกรวม: <strong>{totalQty.toLocaleString()}</strong></span>
+              <span>มูลค่าทุนสต๊อก: <strong>฿{totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+            </div>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-200 dark:bg-slate-700 hover:bg-gray-300 dark:hover:bg-slate-600 rounded-xl font-bold text-gray-700 dark:text-slate-200 transition-colors cursor-pointer"
+            >
+              ปิด
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function UnitModal({ unit, onClose, onSaved }) {
   const isEdit = !!unit?.oldValue;
   const [form, setForm] = useState({
@@ -686,6 +876,7 @@ export default function SettingsPage() {
   const [roleModal, setRoleModal] = useState(null);
   const [storeModal, setStoreModal] = useState(null);
   const [categoryModal, setCategoryModal] = useState(null);
+  const [stockModalCategory, setStockModalCategory] = useState(null);
   const [unitModal, setUnitModal] = useState(null);
   const [assignModal, setAssignModal] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
@@ -807,57 +998,61 @@ export default function SettingsPage() {
     }
   };
 
+  // List pagination (page resets on tab switch)
+  const usersPaging = usePagination(users, 10, activeTab);
+  const catsPaging = usePagination(categories, 10, activeTab);
+
   return (
-    <div className="p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)]">
+    <div className="p-3 sm:p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)] pb-16">
       {/* Title */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 sm:mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">⚙️ ตั้งค่าระบบ (System Management)</h1>
-          <p className="text-xs text-gray-500 mt-1">จัดการข้อมูลสาขา ผู้ใช้งาน หมวดหมู่สินค้า และหน่วยนับสินค้า</p>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-slate-100">⚙️ ตั้งค่าระบบ (System Management)</h1>
+          <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">จัดการข้อมูลสาขา ผู้ใช้งาน หมวดหมู่สินค้า และหน่วยนับสินค้า</p>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-gray-200 mb-6 gap-2 bg-white p-1 rounded-2xl shadow-sm overflow-x-auto">
+      {/* Tabs - Mobile PWA Optimized */}
+      <div className="grid grid-cols-2 sm:flex sm:overflow-x-auto gap-2 bg-white dark:bg-slate-900 p-1.5 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-800 mb-6 scrollbar-none">
         <button
           onClick={() => setActiveTab('stores_users')}
-          className={`py-3 px-5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${
+          className={`py-2.5 sm:py-3 px-3 sm:px-5 text-xs sm:text-sm font-bold rounded-xl transition-all flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
             activeTab === 'stores_users'
               ? 'bg-indigo-600 text-white shadow-md'
-              : 'text-gray-600 hover:bg-gray-100'
+              : 'text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800'
           }`}
         >
-          <span>🏢</span> สาขา & ผู้ใช้งาน
+          <span>🏢</span> <span>สาขา & ผู้ใช้งาน</span>
         </button>
         <button
           onClick={() => setActiveTab('roles')}
-          className={`py-3 px-5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${
+          className={`py-2.5 sm:py-3 px-3 sm:px-5 text-xs sm:text-sm font-bold rounded-xl transition-all flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
             activeTab === 'roles'
               ? 'bg-indigo-600 text-white shadow-md'
-              : 'text-gray-600 hover:bg-gray-100'
+              : 'text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800'
           }`}
         >
-          <span>🎭</span> จัดการบทบาท & สิทธิ์ ({roles.length})
+          <span>🎭</span> <span>บทบาท & สิทธิ์</span> <span className="text-[10px] sm:text-xs opacity-80">({roles.length})</span>
         </button>
         <button
           onClick={() => setActiveTab('categories')}
-          className={`py-3 px-5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${
+          className={`py-2.5 sm:py-3 px-3 sm:px-5 text-xs sm:text-sm font-bold rounded-xl transition-all flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
             activeTab === 'categories'
               ? 'bg-indigo-600 text-white shadow-md'
-              : 'text-gray-600 hover:bg-gray-100'
+              : 'text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800'
           }`}
         >
-          <span>🏷️</span> จัดการหมวดหมู่สินค้า ({categories.length})
+          <span>🏷️</span> <span>หมวดหมู่สินค้า</span> <span className="text-[10px] sm:text-xs opacity-80">({categories.length})</span>
         </button>
         <button
           onClick={() => setActiveTab('units')}
-          className={`py-3 px-5 text-sm font-bold rounded-xl transition-all flex items-center gap-2 whitespace-nowrap ${
+          className={`py-2.5 sm:py-3 px-3 sm:px-5 text-xs sm:text-sm font-bold rounded-xl transition-all flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
             activeTab === 'units'
               ? 'bg-indigo-600 text-white shadow-md'
-              : 'text-gray-600 hover:bg-gray-100'
+              : 'text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800'
           }`}
         >
-          <span>📏</span> จัดการหน่วยนับสินค้า ({SYSTEM_UNITS.length + customUnits.length})
+          <span>📏</span> <span>หน่วยนับสินค้า</span> <span className="text-[10px] sm:text-xs opacity-80">({SYSTEM_UNITS.length + customUnits.length})</span>
         </button>
       </div>
 
@@ -910,7 +1105,7 @@ export default function SettingsPage() {
                 </button>
               </div>
               <div className="space-y-2">
-                {users.map((u) => (
+                {usersPaging.paged.map((u) => (
                   <div key={u.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 hover:bg-gray-50 transition-colors">
                     <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-lg flex-shrink-0">
                       {u.role_name === 'admin' ? '👑' : u.role_name === 'manager' ? '📊' : '🛒'}
@@ -927,6 +1122,16 @@ export default function SettingsPage() {
                   </div>
                 ))}
                 {users.length === 0 && <p className="text-sm text-gray-400 text-center py-8">ไม่พบผู้ใช้งาน</p>}
+                <Pagination
+                  page={usersPaging.page}
+                  totalPages={usersPaging.totalPages}
+                  perPage={usersPaging.perPage}
+                  onPageChange={usersPaging.setPage}
+                  onPerPageChange={usersPaging.setPerPage}
+                  rangeStart={usersPaging.rangeStart}
+                  rangeEnd={usersPaging.rangeEnd}
+                  total={usersPaging.total}
+                />
               </div>
             </div>
           </div>
@@ -1083,42 +1288,56 @@ export default function SettingsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-sm">
-                  {categories.map((cat) => (
-                    <tr key={cat.id} className="hover:bg-gray-50/80 transition-colors">
-                      <td className="py-3.5 px-4 font-bold text-gray-800">
+                  {catsPaging.paged.map((cat) => (
+                    <tr
+                      key={cat.id}
+                      onClick={() => setStockModalCategory(cat)}
+                      className="hover:bg-gray-50/80 dark:hover:bg-slate-800/60 transition-colors cursor-pointer group"
+                    >
+                      <td className="py-3.5 px-4 font-bold text-gray-800 dark:text-slate-100">
                         <div className="flex items-center gap-2">
-                          <span className="text-base">🏷️</span>
-                          <span>{cat.name}</span>
-                          {(cat.name === 'วัตถุดิบ' || cat.name.includes('วัตถุดิบ')) && (
-                            <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">
+                          <span className="text-base group-hover:scale-110 transition-transform">🏷️</span>
+                          <span className="group-hover:text-indigo-600 dark:group-hover:text-indigo-400 group-hover:underline">{cat.name}</span>
+                          {(cat.name === 'วัตถุดิบ' || cat.name.includes('วัตถุดิบ') || cat.is_raw_material) && (
+                            <span className="text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 font-bold px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800">
                               วัตถุดิบสต๊อก
                             </span>
                           )}
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 text-gray-500 max-w-xs truncate">
-                        {cat.description || <span className="text-gray-300 italic">— ไม่มีคำอธิบาย —</span>}
+                      <td className="py-3.5 px-4 text-gray-500 dark:text-slate-400 max-w-xs truncate">
+                        {cat.description || <span className="text-gray-300 dark:text-slate-600 italic">— ไม่มีคำอธิบาย —</span>}
                       </td>
                       <td className="py-3.5 px-4 text-center">
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
-                          (cat.product_count || 0) > 0 ? 'bg-indigo-50 text-indigo-700 border border-indigo-100' : 'bg-gray-100 text-gray-400'
-                        }`}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setStockModalCategory(cat);
+                          }}
+                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold transition-all transform active:scale-95 cursor-pointer shadow-xs ${
+                            (cat.product_count || 0) > 0
+                              ? 'bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/80'
+                              : 'bg-gray-100 dark:bg-slate-800 text-gray-400 dark:text-slate-500 hover:bg-gray-200'
+                          }`}
+                          title="คลิกเพื่อดูรายการสินค้าและสต๊อกในหมวดนี้"
+                        >
                           📦 {cat.product_count || 0} รายการ
-                        </span>
+                        </button>
                       </td>
-                      <td className="py-3.5 px-4 text-center font-mono text-xs font-semibold text-gray-600">
+                      <td className="py-3.5 px-4 text-center font-mono text-xs font-semibold text-gray-600 dark:text-slate-400">
                         {cat.sort_order ?? 0}
                       </td>
-                      <td className="py-3.5 px-4 text-right space-x-2">
+                      <td className="py-3.5 px-4 text-right space-x-2" onClick={(e) => e.stopPropagation()}>
                         <button
                           onClick={() => setCategoryModal(cat)}
-                          className="px-3 py-1 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg text-xs font-bold transition-all"
+                          className="px-3 py-1 bg-blue-50 dark:bg-blue-950/80 text-blue-600 dark:text-blue-300 hover:bg-blue-100 rounded-lg text-xs font-bold transition-all cursor-pointer"
                         >
                           ✏️ แก้ไข
                         </button>
                         <button
                           onClick={() => setDeleteCategoryConfirm(cat)}
-                          className="px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-xs font-bold transition-all"
+                          className="px-3 py-1 bg-red-50 dark:bg-red-950/80 text-red-600 dark:text-red-300 hover:bg-red-100 rounded-lg text-xs font-bold transition-all cursor-pointer"
                         >
                           🗑️ ลบ
                         </button>
@@ -1134,6 +1353,16 @@ export default function SettingsPage() {
                   )}
                 </tbody>
               </table>
+              <Pagination
+                page={catsPaging.page}
+                totalPages={catsPaging.totalPages}
+                perPage={catsPaging.perPage}
+                onPageChange={catsPaging.setPage}
+                onPerPageChange={catsPaging.setPerPage}
+                rangeStart={catsPaging.rangeStart}
+                rangeEnd={catsPaging.rangeEnd}
+                total={catsPaging.total}
+              />
             </div>
           </div>
         </div>
@@ -1245,6 +1474,7 @@ export default function SettingsPage() {
       {roleModal && <RoleModal role={roleModal === 'new' ? null : roleModal} onClose={() => setRoleModal(null)} onSaved={() => { setRoleModal(null); loadRoles(); }} />}
       {storeModal && <StoreModal store={storeModal === 'new' ? null : storeModal} onClose={() => setStoreModal(null)} onSaved={() => { setStoreModal(null); loadStores(); }} />}
       {categoryModal && <CategoryModal category={categoryModal === 'new' ? null : categoryModal} onClose={() => setCategoryModal(null)} onSaved={() => { setCategoryModal(null); loadCategories(); }} />}
+      {stockModalCategory && <CategoryStockModal category={stockModalCategory} onClose={() => setStockModalCategory(null)} />}
       {unitModal && <UnitModal unit={unitModal === 'new' ? null : unitModal} onClose={() => setUnitModal(null)} onSaved={() => { setUnitModal(null); loadCustomUnits(); }} />}
       {assignModal && <AssignmentModal user={assignModal} stores={storeList} onClose={() => setAssignModal(null)} />}
 

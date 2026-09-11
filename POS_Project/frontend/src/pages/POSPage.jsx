@@ -51,14 +51,14 @@ const CartItem = ({ item, onUpdateQuantity, onRemove }) => {
   };
 
   return (
-    <div className="p-3 flex items-center gap-2">
+    <div className="p-3 flex items-center gap-2 hover:bg-gray-50/50 dark:hover:bg-slate-800/50 transition-colors">
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-gray-800 truncate">{item.name}</p>
-        <p className="text-xs text-gray-500">{formatCurrency(item.selling_price)}</p>
+        <p className="text-sm font-semibold text-gray-800 dark:text-slate-100 truncate">{item.name}</p>
+        <p className="text-xs text-gray-500 dark:text-slate-400">{formatCurrency(item.selling_price)}</p>
       </div>
       <div className="flex items-center gap-1">
         <button onClick={() => onUpdateQuantity(item.product_id, item.quantity - 1)}
-          className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center font-bold text-lg">−</button>
+          className="w-8 h-8 rounded-full bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 flex items-center justify-center font-bold text-lg cursor-pointer">−</button>
         <input 
           id={`qty-input-${item.product_id}`}
           type="number" 
@@ -67,13 +67,13 @@ const CartItem = ({ item, onUpdateQuantity, onRemove }) => {
           onChange={handleInputChange}
           onBlur={handleBlur}
           onFocus={(e) => e.target.select()}
-          className="w-12 text-center text-sm font-bold bg-gray-50 rounded-lg py-1 border border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          className="w-12 text-center text-sm font-bold bg-gray-50 dark:bg-slate-800 text-gray-800 dark:text-slate-100 rounded-lg py-1 border border-transparent focus:border-blue-400 focus:bg-white dark:focus:bg-slate-700 outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
         />
         <button onClick={() => onUpdateQuantity(item.product_id, item.quantity + 1)}
-          className="w-8 h-8 rounded-full bg-blue-100 hover:bg-blue-200 text-blue-700 flex items-center justify-center font-bold text-lg">+</button>
+          className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/60 hover:bg-blue-200 dark:hover:bg-blue-800 text-blue-700 dark:text-blue-300 flex items-center justify-center font-bold text-lg cursor-pointer">+</button>
       </div>
-      <span className="text-sm font-semibold w-16 text-right">{formatCurrency(item.selling_price * item.quantity)}</span>
-      <button onClick={() => onRemove(item.product_id)} className="text-red-400 hover:text-red-600 ml-1 text-lg leading-none">✕</button>
+      <span className="text-sm font-semibold w-16 text-right text-gray-800 dark:text-slate-100">{formatCurrency(item.selling_price * item.quantity)}</span>
+      <button onClick={() => onRemove(item.product_id)} className="text-red-400 hover:text-red-600 dark:hover:text-red-300 ml-1 text-lg leading-none cursor-pointer p-1" title="ลบรายการ">✕</button>
     </div>
   );
 };
@@ -93,10 +93,73 @@ export default function POSPage() {
   const [lastAddedItem, setLastAddedItem] = useState(null);
   const bubbleTimeoutRef = useRef(null);
 
+  // Quick Sale Mode (ขายด่วน) State & Timer
+  const [quickSaleMode, setQuickSaleMode] = useState(() => {
+    return localStorage.getItem('pos_quick_sale_mode') === 'true';
+  });
+  const [quickSaleCountdown, setQuickSaleCountdown] = useState(null);
+  const quickSaleTimeoutRef = useRef(null);
+  const quickSaleIntervalRef = useRef(null);
+  const targetTimeRef = useRef(0);
+
+  const cancelQuickSaleTimer = () => {
+    if (quickSaleTimeoutRef.current) {
+      clearTimeout(quickSaleTimeoutRef.current);
+      quickSaleTimeoutRef.current = null;
+    }
+    if (quickSaleIntervalRef.current) {
+      clearInterval(quickSaleIntervalRef.current);
+      quickSaleIntervalRef.current = null;
+    }
+    setQuickSaleCountdown(null);
+  };
+
+  const openCheckoutModal = () => {
+    cancelQuickSaleTimer();
+    loadDebtors();
+    setPaymentModal(true);
+  };
+
+  const startOrResetQuickSaleTimer = () => {
+    cancelQuickSaleTimer();
+    const durationMs = 2000;
+    targetTimeRef.current = Date.now() + durationMs;
+    setQuickSaleCountdown(2.0);
+
+    quickSaleIntervalRef.current = setInterval(() => {
+      const remainingMs = targetTimeRef.current - Date.now();
+      if (remainingMs <= 0) {
+        cancelQuickSaleTimer();
+        loadDebtors();
+        setPaymentModal(true);
+      } else {
+        setQuickSaleCountdown(Math.ceil(remainingMs / 100) / 10);
+      }
+    }, 100);
+  };
+
+  const toggleQuickSale = () => {
+    setQuickSaleMode(prev => {
+      const nextVal = !prev;
+      localStorage.setItem('pos_quick_sale_mode', String(nextVal));
+      if (!nextVal) {
+        cancelQuickSaleTimer();
+      }
+      toast.success(nextVal ? '⚡ เปิดโหมดขายด่วน (นับถอยหลัง 2 วิ เพื่อชำระเงินอัตโนมัติ)' : 'ปิดโหมดขายด่วนแล้ว', { id: 'qs-toggle' });
+      return nextVal;
+    });
+  };
+
+  useEffect(() => {
+    return () => {
+      cancelQuickSaleTimer();
+    };
+  }, []);
+
   const { cart, subTotal, tax, total, addItem: addItemRaw, removeItem, updateQuantity, clearCart } = useCart();
   const { activeStore } = useAuth();
 
-  // Custom addItem to trigger bubble notification
+  // Custom addItem to trigger bubble notification and Quick Sale countdown
   const addItem = (item) => {
     const existingInCart = cart.items.find(i => i.product_id === item.id);
     const currentQty = existingInCart ? existingInCart.quantity : 0;
@@ -128,6 +191,11 @@ export default function POSPage() {
         bubbleTimeoutRef.current = null;
       }, 3000);
     }, 10);
+
+    // Quick Sale 2-second auto-checkout countdown
+    if (quickSaleMode) {
+      startOrResetQuickSaleTimer();
+    }
   };
 
   const handleUpdateQuantity = (productId, newQty) => {
@@ -207,7 +275,7 @@ export default function POSPage() {
     const handleKeyDown = (e) => {
       if (e.key === "F2") { e.preventDefault(); document.getElementById("search-input")?.focus(); }
       if (e.key === "F9") { e.preventDefault(); if (cart.items.length > 0) { loadDebtors(); setPaymentModal(true); } }
-      if (e.key === "Escape") { setPaymentModal(false); setSearchQuery(""); setShowMobileCart(false); }
+      if (e.key === "Escape") { setPaymentModal(false); setSearchQuery(""); setShowMobileCart(false); cancelQuickSaleTimer(); }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -529,12 +597,48 @@ export default function POSPage() {
   return (
     <div className="flex flex-col h-[calc(100dvh-56px)] page-bg-gradient">
 
+      {/* Quick Sale Countdown HUD */}
+      {quickSaleCountdown !== null && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 animate-bounce-short max-w-[92vw]">
+          <div className="flex items-center gap-3 bg-gradient-to-r from-amber-600 via-orange-600 to-amber-500 text-white px-4 py-2.5 rounded-2xl shadow-2xl border-2 border-white/40 backdrop-blur-md">
+            <div className="relative flex items-center justify-center w-8 h-8 rounded-full bg-white/20 font-black text-sm text-white shadow-inner flex-shrink-0">
+              {Math.ceil(quickSaleCountdown)}s
+            </div>
+            <div className="flex flex-col min-w-0">
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-black truncate">
+                <span>⚡ ขายด่วน: กำลังเปิดหน้าชำระเงิน</span>
+              </div>
+              <span className="text-[10px] sm:text-[11px] text-amber-100 truncate">
+                แตะสินค้าอื่นเพื่อรวมบิล ({cart.items.length} รายการ) หรือชำระทันที
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 ml-2 border-l border-white/30 pl-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={openCheckoutModal}
+                className="px-2.5 py-1 sm:px-3 sm:py-1 bg-white text-orange-600 font-black text-xs rounded-xl shadow hover:bg-orange-50 active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+              >
+                ชำระทันที 💳
+              </button>
+              <button
+                type="button"
+                onClick={cancelQuickSaleTimer}
+                className="w-7 h-7 flex items-center justify-center text-white/80 hover:text-white rounded-lg hover:bg-white/10 text-sm font-bold cursor-pointer"
+                title="ยกเลิกนับถอยหลัง"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* DESKTOP (md+) */}
       <div className="hidden md:flex flex-1 min-h-0">
         {/* Left - Products */}
         <div className="w-[65%] flex flex-col border-r border-primary-100/60">
           <div className="p-3 border-b border-primary-100/60 flex-shrink-0 bg-white/50 backdrop-blur-sm">
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               <input id="search-input" type="text" placeholder="🔍 ค้นหาสินค้า / สแกนบาร์โค้ด (F2)"
                 value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                 className="input-field flex-1" autoComplete="off" />
@@ -542,6 +646,23 @@ export default function POSPage() {
                 className="flex-shrink-0 w-11 h-11 rounded-xl text-white flex items-center justify-center shadow hover:opacity-90 active:scale-95 transition-all"
                 style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}>
                 <ScanIcon size={22} color="white" strokeWidth={2} />
+              </button>
+              {/* Quick Sale Toggle */}
+              <button
+                type="button"
+                onClick={toggleQuickSale}
+                className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border shadow-xs cursor-pointer ${
+                  quickSaleMode 
+                    ? 'bg-amber-500 text-white border-amber-600 shadow-amber-200' 
+                    : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700'
+                }`}
+                title={quickSaleMode ? "เปิดโหมดขายด่วนอยู่ (คลิกเพื่อปิด)" : "คลิกเพื่อเปิดโหมดขายด่วน"}
+              >
+                <span className="text-sm">⚡</span>
+                <span className="whitespace-nowrap">ขายด่วน</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${quickSaleMode ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-slate-700 text-gray-500'}`}>
+                  {quickSaleMode ? 'ON' : 'OFF'}
+                </span>
               </button>
             </div>
           </div>
@@ -568,7 +689,7 @@ export default function POSPage() {
       <div className="flex flex-col flex-1 min-h-0 md:hidden relative">
         <div className="flex flex-col flex-1 min-h-0">
           <div className="p-3 border-b border-primary-100/60 bg-white/60 backdrop-blur-sm flex-shrink-0">
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               <input id="search-input" type="text" placeholder="🔍 ค้นหา / สแกนบาร์โค้ด"
                 value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                 className="input-field flex-1" autoComplete="off" />
@@ -576,6 +697,23 @@ export default function POSPage() {
                 className="flex-shrink-0 w-11 h-11 rounded-xl text-white flex items-center justify-center shadow hover:opacity-90 active:scale-95 transition-all"
                 style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}>
                 <ScanIcon size={22} color="white" strokeWidth={2} />
+              </button>
+              {/* Quick Sale Toggle */}
+              <button
+                type="button"
+                onClick={toggleQuickSale}
+                className={`flex items-center gap-1.5 px-2.5 py-2.5 rounded-xl text-xs font-bold transition-all border shadow-xs cursor-pointer ${
+                  quickSaleMode 
+                    ? 'bg-amber-500 text-white border-amber-600 shadow-amber-200' 
+                    : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700'
+                }`}
+                title={quickSaleMode ? "เปิดโหมดขายด่วนอยู่ (คลิกเพื่อปิด)" : "คลิกเพื่อเปิดโหมดขายด่วน"}
+              >
+                <span className="text-sm">⚡</span>
+                <span className="hidden xs:inline whitespace-nowrap">ขายด่วน</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${quickSaleMode ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-slate-700 text-gray-500'}`}>
+                  {quickSaleMode ? 'ON' : 'OFF'}
+                </span>
               </button>
             </div>
           </div>
@@ -585,65 +723,72 @@ export default function POSPage() {
           </div>
         </div>
 
-        {/* Floating Cart Button (FAB) & Messenger Bubble */}
-        <div className="fixed bottom-8 right-8 z-40 flex items-center">
-          {/* Messenger-style Notification Bubble */}
-          {lastAddedItem && (
-            <div className="relative mr-3 animate-slide-left">
-              <div className="bg-[#2196F3] text-white px-4 py-2.5 rounded-xl shadow-[0_8px_30px_rgba(0,0,0,0.2)] text-sm font-bold whitespace-nowrap border border-white/20">
-                เพิ่ม {lastAddedItem.name} แล้ว!
-                {/* Triangular Pointer */}
-                <div className="absolute top-1/2 -right-[7px] -translate-y-1/2 w-0 h-0 border-t-[8px] border-t-transparent border-b-[8px] border-b-transparent border-l-[8px] border-l-[#2196F3]"></div>
-              </div>
-            </div>
-          )}
-
-          <button
-            onClick={() => setShowMobileCart(true)}
-            className="w-16 h-16 rounded-full flex items-center justify-center transition-all active:scale-90 hover:scale-105 border-2 border-white/40 shadow-[0_15px_35px_-5px_rgba(0,0,0,0.4),0_10px_15px_-5px_rgba(0,0,0,0.2)]"
-            style={{ 
-              backgroundImage: 'linear-gradient(135deg, #3300FC 0%, #95008A 50%, #EB0000 100%)'
-            }}
-          >
-            <svg 
-              viewBox="0 0 24 24" 
-              className="w-8 h-8 text-white fill-current"
-            >
-              <path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z" />
-            </svg>
-            {totalQty > 0 && (
-              <span className="absolute -top-2 -right-2 bg-red-600 text-white text-[12px] font-black w-8 h-8 rounded-full flex items-center justify-center shadow-2xl border-2 border-white animate-bounce">
-                <span className="leading-none">{totalQty}</span>
+        {/* Below-screen Cart Panel (แสดงรายการสินค้าด้านล่างหน้าจอ) */}
+        <div className="flex flex-col bg-white/95 dark:bg-slate-900/95 border-t-2 border-purple-200 dark:border-slate-800 shadow-[0_-6px_25px_rgba(0,0,0,0.15)] flex-shrink-0 z-20">
+          {/* Header Bar */}
+          <div className="px-4 py-2 border-b border-gray-100 dark:border-slate-800 flex items-center justify-between bg-gray-50/80 dark:bg-slate-800/80">
+            <div className="flex items-center gap-2">
+              <span className="text-sm">🧾</span>
+              <span className="text-xs font-bold text-gray-700 dark:text-slate-200">
+                รายการในบิล ({totalQty} ชิ้น)
               </span>
-            )}
-          </button>
-        </div>
-
-        {/* Mobile Cart Slide-up Drawer */}
-        {showMobileCart && (
-          <div className="fixed inset-0 z-50 flex flex-col justify-end">
-            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowMobileCart(false)} />
-            <div className="relative bg-white rounded-t-[32px] shadow-2xl flex flex-col max-h-[90%] animate-slide-up">
-              {/* Handle bar */}
-              <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto my-3 flex-shrink-0" />
-              
-              <div className="px-6 py-2 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
-                <h2 className="font-bold text-gray-800 text-lg flex items-center gap-2">
-                  <span>🧾</span> ตะกร้าสินค้า ({totalQty} ชิ้น)
-                </h2>
-                <button onClick={() => setShowMobileCart(false)} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500">✕</button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-2">
-                <CartItems />
-              </div>
-              
-              <div className="p-2 border-t border-gray-100">
-                <CartSummary />
-              </div>
             </div>
+            {cart.items.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm("คุณต้องการล้างรายการสินค้าทั้งหมดใช่หรือไม่?")) {
+                    clearCart();
+                    cancelQuickSaleTimer();
+                  }
+                }}
+                className="text-[11px] font-bold text-red-500 hover:text-red-700 dark:text-red-400 cursor-pointer"
+              >
+                ล้างทั้งหมด
+              </button>
+            )}
           </div>
-        )}
+
+          {/* Item List Below Screen */}
+          <div className="max-h-40 sm:max-h-48 overflow-y-auto divide-y divide-gray-100 dark:divide-slate-800">
+            {cart.items.length === 0 ? (
+              <div className="py-3 text-center text-xs text-gray-400 dark:text-slate-500 flex items-center justify-center gap-2">
+                <span>🛒</span>
+                <span>ยังไม่มีรายการ แตะเลือกสินค้าด้านบนเพื่อเพิ่ม</span>
+              </div>
+            ) : (
+              cart.items.map((item) => (
+                <CartItem
+                  key={item.product_id}
+                  item={item}
+                  onUpdateQuantity={handleUpdateQuantity}
+                  onRemove={removeItem}
+                />
+              ))
+            )}
+          </div>
+
+          {/* Bottom Bar: Total & Checkout Button */}
+          <div className="p-3 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-white dark:bg-slate-900">
+            <div className="flex flex-col min-w-0">
+              <span className="text-[10px] text-gray-400 dark:text-slate-400 font-medium">
+                รวมทั้งสิ้น {cart.discount > 0 ? `(ลด ${formatCurrency(cart.discount)})` : ''}
+              </span>
+              <span className="text-xl font-black text-primary-600 dark:text-purple-400 tracking-tight">
+                {formatCurrency(total)}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={openCheckoutModal}
+              disabled={cart.items.length === 0}
+              className="btn-success flex-1 max-w-[200px] py-3 text-base font-black rounded-xl shadow-md disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <span>💳 ชำระเงิน</span>
+              {cart.items.length > 0 && <span className="text-xs opacity-90">({formatCurrency(total)})</span>}
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Payment Modal */}

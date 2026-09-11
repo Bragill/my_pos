@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { toast } from 'react-hot-toast';
+import { formatQty } from '../utils/format';
 import { 
   BeakerIcon, 
   PlusIcon, 
@@ -15,6 +16,8 @@ import {
 } from '@heroicons/react/24/outline';
 import api, { ingredientsAPI, recipesAPI } from '../services/api';
 import WeightUnitCalculator from '../components/WeightUnitCalculator';
+import Pagination from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
 const UNITS = [
   { label: 'กรัม (g)', value: 'g' },
@@ -144,6 +147,7 @@ export default function RecipesPage() {
   const [yieldUnit, setYieldUnit] = useState('L');
   const [portionCount, setPortionCount] = useState(1);
   const [portionUnit, setPortionUnit] = useState('แก้ว');
+  const [shelfLifeDays, setShelfLifeDays] = useState('');
   const [isDirty, setIsDirty] = useState(false);
   const [loadingRecipe, setLoadingRecipe] = useState(false);
   const [savingRecipe, setSavingRecipe] = useState(false);
@@ -164,6 +168,84 @@ export default function RecipesPage() {
     items: []
   });
   const [submittingProduction, setSubmittingProduction] = useState(false);
+
+  // Work Orders (WO) State
+  const [workOrders, setWorkOrders] = useState([]);
+  const [woSortField, setWoSortField] = useState('created_at');
+  const [woSortOrder, setWoSortOrder] = useState('desc');
+  const [loadingWorkOrders, setLoadingWorkOrders] = useState(false);
+  const [workOrderSearch, setWorkOrderSearch] = useState('');
+  const [selectedWorkOrder, setSelectedWorkOrder] = useState(null);
+  const [loadingWorkOrderDetail, setLoadingWorkOrderDetail] = useState(false);
+
+  const handleWoSort = (field) => {
+    if (woSortField === field) {
+      setWoSortOrder(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setWoSortField(field);
+      setWoSortOrder('asc');
+    }
+  };
+
+  const sortedWorkOrders = useMemo(() => {
+    if (!workOrders || workOrders.length === 0) return [];
+    return [...workOrders].sort((a, b) => {
+      let aVal = a[woSortField];
+      let bVal = b[woSortField];
+
+      if (woSortField === 'user_name') {
+        aVal = a.user_name || a.user_full_name || '';
+        bVal = b.user_name || b.user_full_name || '';
+      }
+
+      if (['batch_count', 'produced_yield', 'total_cost'].includes(woSortField)) {
+        const numA = parseFloat(aVal) || 0;
+        const numB = parseFloat(bVal) || 0;
+        return woSortOrder === 'asc' ? numA - numB : numB - numA;
+      }
+
+      if (woSortField === 'created_at') {
+        const timeA = new Date(aVal).getTime() || 0;
+        const timeB = new Date(bVal).getTime() || 0;
+        return woSortOrder === 'asc' ? timeA - timeB : timeB - timeA;
+      }
+
+      const strA = String(aVal || '').toLowerCase();
+      const strB = String(bVal || '').toLowerCase();
+      if (strA < strB) return woSortOrder === 'asc' ? -1 : 1;
+      if (strA > strB) return woSortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [workOrders, woSortField, woSortOrder]);
+
+  const fetchWorkOrders = async (searchQuery = '') => {
+    try {
+      setLoadingWorkOrders(true);
+      const res = await api.get(`/recipes/work-orders?search=${encodeURIComponent(searchQuery)}`);
+      if (res.data.success) {
+        setWorkOrders(res.data.data || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch Work Orders', err);
+    } finally {
+      setLoadingWorkOrders(false);
+    }
+  };
+
+  const handleOpenWorkOrderDetail = async (wo) => {
+    try {
+      setLoadingWorkOrderDetail(true);
+      setSelectedWorkOrder({ ...wo, items: [] });
+      const res = await api.get(`/recipes/work-orders/${wo.id}`);
+      if (res.data.success) {
+        setSelectedWorkOrder(res.data.data);
+      }
+    } catch (err) {
+      toast.error('ไม่สามารถดึงข้อมูลรายละเอียด Work Order ได้');
+    } finally {
+      setLoadingWorkOrderDetail(false);
+    }
+  };
 
   const handleOpenProductionModal = async (recipe, batchCount = 1) => {
     setProductionModal({
@@ -199,11 +281,19 @@ export default function RecipesPage() {
       });
 
       if (res.data.success) {
-        toast.success(res.data.message || 'ผลิตและอัปเดตสต็อกเรียบร้อยแล้ว');
+        const expiryDate = res.data.data?.expiry_date;
+        const baseMsg = res.data.message || 'ผลิตและอัปเดตสต็อกเรียบร้อยแล้ว';
+        if (expiryDate) {
+          const expText = new Date(expiryDate).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          toast.success(`${baseMsg}\nวันหมดอายุของล็อตนี้: ${expText}`, { duration: 5000 });
+        } else {
+          toast.success(baseMsg);
+        }
         setProductionModal({ show: false, recipe: null, batchCount: 1, loadingItems: false, items: [] });
         fetchIngredients();
         fetchProductsAndCategories();
         fetchRecipeSummary();
+        fetchWorkOrders();
       }
     } catch (err) {
       toast.error(err.response?.data?.error?.message || 'เกิดข้อผิดพลาดในการผลิตและอัปเดตสต็อก');
@@ -348,6 +438,7 @@ export default function RecipesPage() {
     fetchIngredients();
     fetchProductsAndCategories();
     fetchRecipeSummary();
+    fetchWorkOrders();
   }, []);
 
   const fetchIngredients = async () => {
@@ -507,6 +598,7 @@ export default function RecipesPage() {
     setYieldUnit(product.unit || 'L');
     setPortionCount(product.portion_count || product.recipe_yield || 1);
     setPortionUnit(product.portion_unit || product.unit || 'แก้ว');
+    setShelfLifeDays(product.shelf_life_days != null ? product.shelf_life_days : '');
 
     // Auto-detect matching POS finished sale products (is_raw_material === 0)
     const matchingSaleProducts = (products || []).filter(p => 
@@ -531,6 +623,7 @@ export default function RecipesPage() {
           setYieldUnit(res.data.data.product.unit || product.unit || 'L');
           setPortionCount(res.data.data.product.portion_count || res.data.data.product.recipe_yield || 1);
           setPortionUnit(res.data.data.product.portion_unit || res.data.data.product.unit || 'แก้ว');
+          setShelfLifeDays(res.data.data.product.shelf_life_days != null ? res.data.data.product.shelf_life_days : '');
         }
       }
     } catch (err) {
@@ -786,15 +879,16 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
       setSavingRecipe(true);
 
       const newSellingPrice = parseFloat(sellingPrice) || 0;
-      if (newSellingPrice !== selectedProduct.selling_price || yieldUnit !== selectedProduct.unit) {
+      const targetUnit = portionUnit || yieldUnit || selectedProduct.unit || 'ถุง';
+      if (newSellingPrice !== selectedProduct.selling_price || targetUnit !== selectedProduct.unit) {
         await api.put(`/products/${selectedProduct.id}`, {
           selling_price: newSellingPrice,
-          unit: yieldUnit
+          unit: targetUnit
         });
         setSelectedProduct(prev => ({
           ...prev,
           selling_price: newSellingPrice,
-          unit: yieldUnit
+          unit: targetUnit
         }));
       }
 
@@ -803,6 +897,7 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
         recipe_yield: Math.max(0.0001, parseFloat(recipeYield) || 1),
         portion_count: Math.max(0.0001, parseFloat(portionCount) || 1),
         portion_unit: portionUnit || 'แก้ว',
+        shelf_life_days: shelfLifeDays !== '' && shelfLifeDays !== null ? Math.max(0, parseInt(shelfLifeDays, 10) || 0) : null,
         items: recipeItems.map(r => ({
           ingredient_id: r.ingredient_id,
           quantity: parseFloat(r.quantity) || 0,
@@ -821,7 +916,8 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
           recipe_name: payload.recipe_name,
           recipe_yield: payload.recipe_yield,
           portion_count: payload.portion_count,
-          portion_unit: payload.portion_unit
+          portion_unit: payload.portion_unit,
+          shelf_life_days: payload.shelf_life_days
         }));
         fetchProductsAndCategories();
         fetchRecipeSummary();
@@ -877,80 +973,95 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
     return matchSearch && matchCategory;
   });
 
+  // Selectable POS products for recipe mapping (TAB 3)
+  const mappingProducts = products.filter(p => p.is_raw_material !== 1 && p.is_raw_material !== true && p.category_name !== 'วัตถุดิบ' && (!p.category_name || !p.category_name.includes('วัตถุดิบ')))
+    .filter(p => !mappingSearch || p.name.toLowerCase().includes(mappingSearch.toLowerCase()) || (p.sku && p.sku.toLowerCase().includes(mappingSearch.toLowerCase())));
+
+  // Table pagination (page resets on new search / tab switch)
+  const ingredientsPaging = usePagination(ingredients, 20, ingredientSearch + '|' + activeTab);
+  const mappingPaging = usePagination(mappingProducts, 20, mappingSearch + '|' + activeTab);
+  const woPaging = usePagination(sortedWorkOrders, 10, workOrderSearch + '|' + activeTab);
+
   return (
     <div className="p-3 sm:p-6 max-w-7xl mx-auto space-y-4 sm:space-y-6">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-4 sm:p-6 text-white shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="bg-gradient-to-r from-indigo-50 via-white to-purple-50 rounded-2xl p-4 sm:p-6 shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border border-indigo-100">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2.5">
-            <BeakerIcon className="w-7 h-7 sm:w-8 sm:h-8 text-indigo-400 animate-pulse shrink-0" />
+          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2.5 text-gray-800">
+            <BeakerIcon className="w-7 h-7 sm:w-8 sm:h-8 text-indigo-600 animate-pulse shrink-0" />
             <span>ระบบสูตรอาหาร & จัดการวัตถุดิบ (Recipe & BOM)</span>
           </h1>
-          <p className="text-slate-300 text-xs sm:text-sm mt-1">
+          <p className="text-gray-500 text-xs sm:text-sm mt-1">
             คำนวณต้นทุนตามสูตรวัตถุดิบจริง ตัดสต็อกวัตถุดิบอัตโนมัติเมื่อมีการขาย
           </p>
         </div>
         <div className="grid grid-cols-3 gap-2 w-full md:w-auto">
-          <div className="bg-white/10 backdrop-blur-md px-2.5 sm:px-4 py-2 rounded-xl text-center border border-white/10">
-            <p className="text-[10px] sm:text-xs text-slate-300">วัตถุดิบทั้งหมด</p>
-            <p className="text-base sm:text-xl font-bold text-indigo-300">{ingredients.length} รายการ</p>
+          <div className="bg-white px-2.5 sm:px-4 py-2 rounded-xl text-center border border-gray-200 shadow-sm">
+            <p className="text-[10px] sm:text-xs text-gray-500">วัตถุดิบทั้งหมด</p>
+            <p className="text-base sm:text-xl font-bold text-indigo-700">{ingredients.length} รายการ</p>
           </div>
-          <div className="bg-white/10 backdrop-blur-md px-2.5 sm:px-4 py-2 rounded-xl text-center border border-white/10">
-            <p className="text-[10px] sm:text-xs text-slate-300">สต็อกวัตถุดิบต่ำ</p>
-            <p className={`text-base sm:text-xl font-bold ${lowStockIngredientsCount > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+          <div className="bg-white px-2.5 sm:px-4 py-2 rounded-xl text-center border border-gray-200 shadow-sm">
+            <p className="text-[10px] sm:text-xs text-gray-500">สต็อกวัตถุดิบต่ำ</p>
+            <p className={`text-base sm:text-xl font-bold ${lowStockIngredientsCount > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
               {lowStockIngredientsCount} รายการ
             </p>
           </div>
-          <div className="bg-white/10 backdrop-blur-md px-2.5 sm:px-4 py-2 rounded-xl text-center border border-white/10">
-            <p className="text-[10px] sm:text-xs text-slate-300">เมนูที่มีสูตรแล้ว</p>
-            <p className="text-base sm:text-xl font-bold text-cyan-300">{configuredRecipesCount} เมนู</p>
+          <div className="bg-white px-2.5 sm:px-4 py-2 rounded-xl text-center border border-gray-200 shadow-sm">
+            <p className="text-[10px] sm:text-xs text-gray-500">เมนูที่มีสูตรแล้ว</p>
+            <p className="text-base sm:text-xl font-bold text-cyan-600">{configuredRecipesCount} เมนู</p>
           </div>
         </div>
       </div>
 
-      {/* Navigation Tabs (PWA Responsive Horizontal Scroll & Compact Titles) */}
-      <div className="flex border-b border-slate-200 bg-white rounded-t-xl px-1 sm:px-4 pt-1.5 sm:pt-2 shadow-sm overflow-x-auto whitespace-nowrap scrollbar-none">
+      {/* Navigation Tabs (Responsive Pill Grid - No Scrollbar) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 border border-slate-200 bg-white rounded-2xl p-1.5 gap-1.5 shadow-xs">
         <button
+          type="button"
           onClick={() => setActiveTab('ingredients')}
-          className={`flex items-center gap-1 sm:gap-2 px-2.5 sm:px-6 py-2 sm:py-3 font-semibold text-xs sm:text-sm border-b-2 transition-all shrink-0 ${
+          className={`flex items-center justify-center gap-2 px-3 py-2.5 font-extrabold text-xs sm:text-sm transition-all rounded-xl cursor-pointer ${
             activeTab === 'ingredients'
-              ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50 rounded-t-lg'
-              : 'border-transparent text-slate-500 hover:text-slate-700'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
         >
           <ScaleIcon className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-          <span>
-            <span className="hidden sm:inline">คลังวัตถุดิบ (Raw Ingredients Stock)</span>
-            <span className="sm:hidden">คลังวัตถุดิบ</span>
-          </span>
+          <span className="truncate">คลังวัตถุดิบ</span>
         </button>
         <button
+          type="button"
           onClick={() => setActiveTab('master_recipes')}
-          className={`flex items-center gap-1 sm:gap-2 px-2.5 sm:px-6 py-2 sm:py-3 font-semibold text-xs sm:text-sm border-b-2 transition-all shrink-0 ${
+          className={`flex items-center justify-center gap-2 px-3 py-2.5 font-extrabold text-xs sm:text-sm transition-all rounded-xl cursor-pointer ${
             activeTab === 'master_recipes'
-              ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50 rounded-t-lg'
-              : 'border-transparent text-slate-500 hover:text-slate-700'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
         >
-          <BeakerIcon className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-600 shrink-0" />
-          <span>
-            <span className="hidden sm:inline">คลังสูตรอาหาร & BOM (Master Recipe Library)</span>
-            <span className="sm:hidden">คลังสูตรอาหาร</span>
-          </span>
+          <BeakerIcon className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+          <span className="truncate">คลังสูตรอาหาร & BOM</span>
         </button>
         <button
+          type="button"
           onClick={() => setActiveTab('recipes')}
-          className={`flex items-center gap-1 sm:gap-2 px-2.5 sm:px-6 py-2 sm:py-3 font-semibold text-xs sm:text-sm border-b-2 transition-all shrink-0 ${
+          className={`flex items-center justify-center gap-2 px-3 py-2.5 font-extrabold text-xs sm:text-sm transition-all rounded-xl cursor-pointer ${
             activeTab === 'recipes'
-              ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50 rounded-t-lg'
-              : 'border-transparent text-slate-500 hover:text-slate-700'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
         >
-          <ShoppingBagIcon className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
-          <span>
-            <span className="hidden sm:inline">ผูกสูตรกับเมนูขาย POS (Product-Recipe Mapping)</span>
-            <span className="sm:hidden">ผูกสูตรขาย POS</span>
-          </span>
+          <ShoppingBagIcon className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+          <span className="truncate">ผูกสูตรขาย POS</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => { setActiveTab('work_orders'); fetchWorkOrders(); }}
+          className={`flex items-center justify-center gap-2 px-3 py-2.5 font-extrabold text-xs sm:text-sm transition-all rounded-xl cursor-pointer ${
+            activeTab === 'work_orders'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+          }`}
+        >
+          <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+          <span className="truncate">ประวัติการผลิต (WO)</span>
         </button>
       </div>
 
@@ -1011,7 +1122,7 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
                     </td>
                   </tr>
                 ) : (
-                  ingredients.map((ing) => {
+                  ingredientsPaging.paged.map((ing) => {
                     const isLow = ing.quantity <= ing.reorder_level;
                     return (
                       <tr key={ing.id} className="hover:bg-slate-50/80 transition-colors">
@@ -1020,9 +1131,9 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
                         <td className="p-2.5 sm:p-4 text-slate-600">{ing.unit}</td>
                         <td className="p-2.5 sm:p-4 font-semibold text-slate-700">฿{ing.cost_per_unit.toFixed(2)}</td>
                         <td className="p-2.5 sm:p-4 font-bold text-slate-800">
-                          {ing.quantity} {ing.unit}
+                          {formatQty(ing.quantity)} {ing.unit}
                         </td>
-                        <td className="p-2.5 sm:p-4 text-slate-500">{ing.reorder_level} {ing.unit}</td>
+                        <td className="p-2.5 sm:p-4 text-slate-500">{formatQty(ing.reorder_level)} {ing.unit}</td>
                         <td className="p-2.5 sm:p-4">
                           {isLow ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
@@ -1042,6 +1153,16 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
                 )}
               </tbody>
             </table>
+            <Pagination
+              page={ingredientsPaging.page}
+              totalPages={ingredientsPaging.totalPages}
+              perPage={ingredientsPaging.perPage}
+              onPageChange={ingredientsPaging.setPage}
+              onPerPageChange={ingredientsPaging.setPerPage}
+              rangeStart={ingredientsPaging.rangeStart}
+              rangeEnd={ingredientsPaging.rangeEnd}
+              total={ingredientsPaging.total}
+            />
           </div>
         </div>
       )}
@@ -1393,6 +1514,23 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
                           </select>
                         </div>
                       </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-amber-300 mb-1">อายุการเก็บรักษา (วัน)</label>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            step="1"
+                            min="0"
+                            placeholder="ไม่จำกัด"
+                            value={shelfLifeDays}
+                            onFocus={(e) => e.target.select()}
+                            onChange={(e) => { setShelfLifeDays(e.target.value); setIsDirty(true); }}
+                            className="w-24 px-2.5 py-1.5 border border-amber-500/60 rounded-xl text-sm font-extrabold text-center bg-slate-800 text-amber-300 placeholder-slate-500 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                            title="จำนวนวันหลังผลิตก่อนสินค้าหมดอายุ (เว้นว่าง = ไม่ติดตามวันหมดอายุ)"
+                          />
+                          <span className="text-xs text-slate-400">วัน</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -1704,10 +1842,7 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/80">
-                        {products
-                          .filter(p => p.is_raw_material !== 1 && p.is_raw_material !== true && p.category_name !== 'วัตถุดิบ' && (!p.category_name || !p.category_name.includes('วัตถุดิบ')))
-                          .filter(p => !mappingSearch || p.name.toLowerCase().includes(mappingSearch.toLowerCase()) || (p.sku && p.sku.toLowerCase().includes(mappingSearch.toLowerCase())))
-                          .map(p => {
+                        {mappingPaging.paged.map(p => {
                             const activeMappedId = targetMappedProductIds[0] || selectedProduct?.id;
                             const isSelected = activeMappedId === p.id;
                             const isMain = p.id === selectedProduct?.id;
@@ -1761,6 +1896,16 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
                           })}
                       </tbody>
                     </table>
+                    <Pagination
+                      page={mappingPaging.page}
+                      totalPages={mappingPaging.totalPages}
+                      perPage={mappingPaging.perPage}
+                      onPageChange={mappingPaging.setPage}
+                      onPerPageChange={mappingPaging.setPerPage}
+                      rangeStart={mappingPaging.rangeStart}
+                      rangeEnd={mappingPaging.rangeEnd}
+                      total={mappingPaging.total}
+                    />
                   </div>
                 </div>
 
@@ -2302,6 +2447,317 @@ function calculateItemCostAndQty(ing, newUnit, oldUnit, currentQty) {
                     </div>
                   </div>
                 ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: WORK ORDERS HISTORY & LOGS */}
+      {activeTab === 'work_orders' && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 sm:p-6 space-y-4 sm:space-y-6">
+          {/* Header & Controls Bar */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <CheckCircleIcon className="w-6 h-6 text-amber-500" />
+                <span>ประวัติการผลิต & เลขที่ใบสั่งผลิต (Work Orders Log)</span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                ค้นหา และตรวจสอบประวัติการผลิตย้อนหลัง รายการวัตถุดิบที่ตัดสต็อกจริง และผู้ดำเนินการ
+              </p>
+            </div>
+
+            {/* Search Input & Refresh */}
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <div className="relative flex-1 sm:w-64">
+                <MagnifyingGlassIcon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="ค้นหาเลขที่ WO / ชื่อสินค้า..."
+                  value={workOrderSearch}
+                  onChange={(e) => {
+                    setWorkOrderSearch(e.target.value);
+                    fetchWorkOrders(e.target.value);
+                  }}
+                  className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => fetchWorkOrders(workOrderSearch)}
+                className="p-2 border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 transition-colors"
+                title="รีเฟรชประวัติการผลิต"
+              >
+                <ArrowPathIcon className={`w-5 h-5 ${loadingWorkOrders ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* Statistics Bar */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-900 text-white p-4 rounded-xl shadow-inner">
+            <div>
+              <p className="text-xs text-slate-400 font-semibold">จำนวนใบสั่งผลิตทั้งหมด (WOs)</p>
+              <p className="text-xl font-extrabold text-amber-300 mt-0.5">{workOrders.length} รายการ</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 font-semibold">ผลผลิตรวมที่ได้รับเข้าสต็อก</p>
+              <p className="text-xl font-extrabold text-cyan-300 mt-0.5">
+                +{workOrders.reduce((sum, wo) => sum + (parseFloat(wo.produced_yield) || 0), 0).toFixed(2)} หน่วย
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 font-semibold">ต้นทุนวัตถุดิบที่ใช้ผลิตรวม</p>
+              <p className="text-xl font-extrabold text-emerald-400 mt-0.5">
+                ฿{workOrders.reduce((sum, wo) => sum + (parseFloat(wo.total_cost) || 0), 0).toFixed(2)}
+              </p>
+            </div>
+          </div>
+
+          {/* Work Orders Table */}
+          <div className="overflow-x-auto rounded-xl border border-slate-100">
+            <table className="w-full text-left text-xs sm:text-sm">
+              <thead className="bg-slate-800 text-slate-200 font-bold uppercase text-[11px] tracking-wider select-none">
+                <tr>
+                  <th className="p-3 cursor-pointer hover:bg-slate-700 transition-colors" onClick={() => handleWoSort('wo_number')}>
+                    <div className="flex items-center gap-1.5">
+                      <span>เลขที่ WO</span>
+                      <span className="text-amber-400 text-xs">{woSortField === 'wo_number' ? (woSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </div>
+                  </th>
+                  <th className="p-3 cursor-pointer hover:bg-slate-700 transition-colors" onClick={() => handleWoSort('created_at')}>
+                    <div className="flex items-center gap-1.5">
+                      <span>วัน-เวลา ที่ผลิต</span>
+                      <span className="text-amber-400 text-xs">{woSortField === 'created_at' ? (woSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </div>
+                  </th>
+                  <th className="p-3 cursor-pointer hover:bg-slate-700 transition-colors" onClick={() => handleWoSort('product_name')}>
+                    <div className="flex items-center gap-1.5">
+                      <span>สูตร / สินค้า</span>
+                      <span className="text-amber-400 text-xs">{woSortField === 'product_name' ? (woSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </div>
+                  </th>
+                  <th className="p-3 cursor-pointer hover:bg-slate-700 transition-colors text-center" onClick={() => handleWoSort('batch_count')}>
+                    <div className="flex items-center justify-center gap-1.5">
+                      <span>จำนวน Batch</span>
+                      <span className="text-amber-400 text-xs">{woSortField === 'batch_count' ? (woSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </div>
+                  </th>
+                  <th className="p-3 cursor-pointer hover:bg-slate-700 transition-colors text-right" onClick={() => handleWoSort('produced_yield')}>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span>ผลผลิตที่รับเข้า</span>
+                      <span className="text-amber-400 text-xs">{woSortField === 'produced_yield' ? (woSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </div>
+                  </th>
+                  <th className="p-3 cursor-pointer hover:bg-slate-700 transition-colors text-right" onClick={() => handleWoSort('total_cost')}>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span>ต้นทุนรวม (฿)</span>
+                      <span className="text-amber-400 text-xs">{woSortField === 'total_cost' ? (woSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </div>
+                  </th>
+                  <th className="p-3 cursor-pointer hover:bg-slate-700 transition-colors text-center" onClick={() => handleWoSort('user_name')}>
+                    <div className="flex items-center justify-center gap-1.5">
+                      <span>ผู้ดำเนินการ</span>
+                      <span className="text-amber-400 text-xs">{woSortField === 'user_name' ? (woSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </div>
+                  </th>
+                  <th className="p-3 text-center">จัดการ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {loadingWorkOrders ? (
+                  <tr>
+                    <td colSpan="8" className="p-8 text-center text-slate-400">
+                      กำลังโหลดประวัติการผลิต Work Orders...
+                    </td>
+                  </tr>
+                ) : sortedWorkOrders.length === 0 ? (
+                  <tr>
+                    <td colSpan="8" className="p-8 text-center text-slate-400">
+                      ยังไม่มีประวัติการสั่งผลิตในระบบ (กดผลิตสูตรในคลังสูตรอาหารเพื่อสร้าง WO ใหม่)
+                    </td>
+                  </tr>
+                ) : (
+                  woPaging.paged.map((wo) => (
+                    <tr key={wo.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="p-3 font-mono font-extrabold text-indigo-600">
+                        {wo.wo_number}
+                      </td>
+                      <td className="p-3 text-slate-500 text-xs">
+                        {new Date(wo.created_at).toLocaleString('th-TH')}
+                      </td>
+                      <td className="p-3 font-bold text-slate-800">
+                        {wo.product_name}
+                      </td>
+                      <td className="p-3 text-center font-extrabold text-slate-700">
+                        {wo.batch_count} Batch
+                      </td>
+                      <td className="p-3 text-right font-extrabold text-emerald-600">
+                        +{wo.produced_yield} {wo.yield_unit}
+                      </td>
+                      <td className="p-3 text-right font-mono font-bold text-slate-800">
+                        ฿{(parseFloat(wo.total_cost) || 0).toFixed(2)}
+                      </td>
+                      <td className="p-3 text-center text-xs text-slate-600 font-semibold">
+                        {wo.user_name || wo.user_full_name || 'ผู้ใช้งาน'}
+                      </td>
+                      <td className="p-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenWorkOrderDetail(wo)}
+                          className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-200 rounded-lg text-xs font-bold transition-all shadow-2xs"
+                        >
+                          🔍 ดูรายการตัดสต็อก
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+            <Pagination
+              page={woPaging.page}
+              totalPages={woPaging.totalPages}
+              perPage={woPaging.perPage}
+              onPageChange={woPaging.setPage}
+              onPerPageChange={woPaging.setPerPage}
+              rangeStart={woPaging.rangeStart}
+              rangeEnd={woPaging.rangeEnd}
+              total={woPaging.total}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Work Order Detail */}
+      {selectedWorkOrder && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 text-white rounded-2xl border border-slate-700 shadow-2xl max-w-2xl w-full p-5 sm:p-6 space-y-5 animate-in fade-in zoom-in-95 my-auto">
+            {/* Modal Header */}
+            <div className="flex justify-between items-start border-b border-slate-800 pb-4">
+              <div>
+                <span className="text-[11px] font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-700/60 px-2.5 py-0.5 rounded-full font-mono">
+                  📋 Work Order: {selectedWorkOrder.wo_number}
+                </span>
+                <h3 className="text-xl font-extrabold text-white mt-1.5 flex items-center gap-2">
+                  <span>รายละเอียดใบสั่งผลิต: {selectedWorkOrder.product_name}</span>
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedWorkOrder(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Meta Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-center">
+              <div>
+                <p className="text-[11px] text-slate-400 font-medium">จำนวนผลิต</p>
+                <p className="text-base font-extrabold text-amber-300">{selectedWorkOrder.batch_count} Batch</p>
+              </div>
+              <div>
+                <p className="text-[11px] text-slate-400 font-medium">ผลผลิตรับเข้าสต็อก</p>
+                <p className="text-base font-extrabold text-cyan-300">+{selectedWorkOrder.produced_yield} {selectedWorkOrder.yield_unit}</p>
+              </div>
+              <div>
+                <p className="text-[11px] text-slate-400 font-medium">ต้นทุนวัตถุดิบรวม</p>
+                <p className="text-base font-extrabold text-emerald-400">฿{(parseFloat(selectedWorkOrder.total_cost) || 0).toFixed(2)}</p>
+              </div>
+              <div>
+                <p className="text-[11px] text-slate-400 font-medium">ผู้ดำเนินการ</p>
+                <p className="text-xs font-bold text-slate-300 truncate">{selectedWorkOrder.user_name || 'ผู้ใช้งาน'}</p>
+              </div>
+              <div>
+                <p className="text-[11px] text-slate-400 font-medium">วันหมดอายุ</p>
+                <p className={`text-xs font-bold truncate ${selectedWorkOrder.batch_status === 'expired' ? 'text-red-400' : 'text-amber-300'}`}>
+                  {selectedWorkOrder.expiry_date
+                    ? new Date(selectedWorkOrder.expiry_date).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: 'numeric' })
+                    : 'ไม่จำกัด'}
+                </p>
+              </div>
+            </div>
+
+            {/* Finished Goods Produced Section */}
+            <div className="bg-emerald-950/40 border border-emerald-800/60 rounded-xl p-3.5 flex items-center justify-between shadow-inner">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-bold text-lg">
+                  🎁
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">สินค้าสำเร็จรูปที่รับเข้าสต็อก (Finished Goods Received)</p>
+                  <p className="text-sm font-extrabold text-white">{selectedWorkOrder.product_name}</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-[11px] font-bold text-slate-400 block">จำนวนที่เพิ่มเข้าสต็อก</span>
+                <span className="text-lg font-black text-emerald-300 font-mono">+{selectedWorkOrder.produced_yield} {selectedWorkOrder.yield_unit}</span>
+              </div>
+            </div>
+
+            {/* Itemized Raw Material Deductions Table */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+                <ScaleIcon className="w-4 h-4 text-indigo-400" />
+                <span>รายการวัตถุดิบที่ตัดสต็อกจริง (Itemized Deductions):</span>
+              </h4>
+
+              <div className="overflow-x-auto rounded-xl border border-slate-800 max-h-56 overflow-y-auto">
+                <table className="w-full text-left text-xs bg-slate-950/60">
+                  <thead className="bg-slate-800 text-slate-300 font-bold sticky top-0 border-b border-slate-700">
+                    <tr>
+                      <th className="p-2.5">ชื่อวัตถุดิบ</th>
+                      <th className="p-2.5 text-right">ปริมาณที่ตัดสต็อก</th>
+                      <th className="p-2.5 text-right">ต้นทุนวัตถุดิบ (฿)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {loadingWorkOrderDetail ? (
+                      <tr>
+                        <td colSpan="3" className="p-6 text-center text-slate-400">กำลังดึงข้อมูลวัตถุดิบ...</td>
+                      </tr>
+                    ) : (selectedWorkOrder.items || []).length === 0 ? (
+                      <tr>
+                        <td colSpan="3" className="p-6 text-center text-slate-400">ไม่พบข้อมูลวัตถุดิบใน WO นี้</td>
+                      </tr>
+                    ) : (
+                      selectedWorkOrder.items.map((item, idx) => (
+                        <tr key={idx} className="hover:bg-slate-800/40">
+                          <td className="p-2.5 font-semibold text-white">
+                            {item.ingredient_name}
+                          </td>
+                          <td className="p-2.5 text-right font-extrabold text-cyan-300">
+                            -{item.quantity} {item.unit}
+                          </td>
+                          <td className="p-2.5 text-right font-mono text-emerald-400 font-bold">
+                            ฿{(parseFloat(item.cost) || 0).toFixed(2)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Remark Box */}
+            {selectedWorkOrder.remark && (
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-slate-400 text-xs">
+                <span className="font-bold text-slate-300">หมายเหตุ: </span>
+                <span>{selectedWorkOrder.remark}</span>
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="flex justify-end pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSelectedWorkOrder(null)}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all"
+              >
+                ปิด
+              </button>
             </div>
           </div>
         </div>

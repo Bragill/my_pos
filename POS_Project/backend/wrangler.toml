@@ -1,0 +1,31 @@
+name = "pos-backend"
+account_id = "f43576e2a699033dd84c2af3603aa68e"
+main = "src/worker.js"
+compatibility_date = "2025-02-14"
+compatibility_flags = ["nodejs_compat"]
+
+[alias]
+"iconv-lite" = "./src/shims/iconv-lite.js"
+
+[vars]
+NODE_ENV = "production"
+TZ = "Asia/Bangkok"
+VAT_RATE = "7"
+JWT_SECRET = "pos_secret_key_2024"
+JWT_EXPIRES_IN = "8h"
+OCR_PROVIDER = "gemini"
+GEMINI_MODEL = "gemini-2.5-flash"
+R2_BUCKET_NAME = "pos"
+R2_PUBLIC_DOMAIN = "https://pub-d470ad59fc6847be90201e4afcb7ad10.r2.dev"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pos_system"
+database_id = "fee1af59-5f26-48d2-8068-bf997f7da322"
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "pos"
+
+[triggers]
+crons = ["5 17 * * *"]

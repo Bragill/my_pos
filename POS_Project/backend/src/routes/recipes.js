@@ -3,6 +3,7 @@ const db = require("../database/dbHelper");
 const { authenticate, authorize } = require("../middleware/auth");
 const { AppError } = require("../middleware/errorHandler");
 const { v4: uuidv4 } = require("uuid");
+const batchService = require("../services/batchService");
 const router = express.Router();
 
 function getUnitFamily(unitStr) {
@@ -61,7 +62,7 @@ function calculateRecipeItemCost(qty, recipeUnit, ingUnit, ingCostPerUnit) {
 router.get("/product/:productId", authenticate, async (req, res, next) => {
   try {
     const product = await db.get(
-      "SELECT id, name, sku, cost_price, selling_price, recipe_name, recipe_yield, portion_count, portion_unit FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
+      "SELECT id, name, sku, cost_price, selling_price, recipe_name, recipe_yield, portion_count, portion_unit, shelf_life_days FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
       [req.params.productId, req.store_id]
     );
 
@@ -161,7 +162,8 @@ router.get("/product/:productId", authenticate, async (req, res, next) => {
           recipe_yield: yieldQty,
           portion_count: portionQty,
           portion_unit: product.portion_unit || 'แก้ว',
-          recipe_name: product.recipe_name || ''
+          recipe_name: product.recipe_name || '',
+          shelf_life_days: product.shelf_life_days != null ? parseInt(product.shelf_life_days, 10) : null
         },
         recipe: formattedItems,
         calculated_cost: batchCost,
@@ -177,7 +179,7 @@ router.get("/product/:productId", authenticate, async (req, res, next) => {
 // POST / PUT recipe for a product (Admin/Manager)
 router.post("/product/:productId", authenticate, authorize("admin", "manager"), async (req, res, next) => {
   try {
-    const { items, recipe_name, recipe_yield, portion_count, portion_unit, update_product_cost = false, target_product_ids = [] } = req.body;
+    const { items, recipe_name, recipe_yield, portion_count, portion_unit, shelf_life_days, update_product_cost = false, target_product_ids = [] } = req.body;
     const productId = req.params.productId;
 
     const product = await db.get(
@@ -195,6 +197,9 @@ router.post("/product/:productId", authenticate, authorize("admin", "manager"), 
     const portionQty = Math.max(0.0001, parseFloat(portion_count) || yieldQty);
     const portUnit = portion_unit !== undefined ? String(portion_unit).trim() : 'แก้ว';
     const recName = recipe_name !== undefined ? String(recipe_name).trim() : null;
+    const shelfLifeDays = (shelf_life_days !== undefined && shelf_life_days !== null && shelf_life_days !== '')
+      ? Math.max(0, parseInt(shelf_life_days, 10) || 0)
+      : null;
 
     // Build unique product IDs list to update (including target_product_ids if mapped)
     const productIdsToUpdate = Array.from(new Set([productId, ...target_product_ids].filter(Boolean)));
@@ -202,10 +207,10 @@ router.post("/product/:productId", authenticate, authorize("admin", "manager"), 
     let calculatedCost = 0;
 
     for (const pid of productIdsToUpdate) {
-      // Update recipe_name, recipe_yield, portion_count, portion_unit in products table
+      // Update recipe_name, recipe_yield, portion_count, portion_unit, unit in products table
       await db.run(
-        "UPDATE products SET recipe_name = ?, recipe_yield = ?, portion_count = ?, portion_unit = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?",
-        [recName, yieldQty, portionQty, portUnit, pid]
+        "UPDATE products SET recipe_name = ?, recipe_yield = ?, portion_count = ?, portion_unit = ?, shelf_life_days = ?, unit = COALESCE(NULLIF(?, ''), unit), updated_at = datetime('now', '+7 hours') WHERE id = ?",
+        [recName, yieldQty, portionQty, portUnit, shelfLifeDays, portUnit, pid]
       );
 
       // Delete existing recipe items for this product
@@ -491,7 +496,7 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
     }
 
     const product = await db.get(
-      "SELECT id, name, unit, recipe_name, recipe_yield, portion_count, portion_unit FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
+      "SELECT id, name, unit, recipe_name, recipe_yield, portion_count, portion_unit, shelf_life_days FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
       [product_id, currentStore]
     );
 
@@ -573,8 +578,14 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
       return next(new AppError(`ไม่สามารถยืนยันการผลิตได้ เนื่องจากวัตถุดิบไม่เพียงพอ: ${deficitMsg}`, 400));
     }
 
+    // Generate Work Order Number (e.g. WO-20260908-4921)
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const randomSeq = String(Math.floor(1000 + Math.random() * 9000));
+    const woNumber = `WO-${dateStr}-${randomSeq}`;
+    const woId = uuidv4();
+
     // Perform atomic stock updates
-    // 1. Deduct raw ingredient stock & record transaction
+    // 1. Deduct raw ingredient stock & record transaction in both ingredient_stock_transactions and stock_transactions
     for (const ing of ingredientRequirements) {
       await db.run(
         "UPDATE ingredients SET quantity = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?",
@@ -586,16 +597,40 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
         [ing.new_stock_ing_unit, ing.ingredient_id]
       );
 
+      // If this ingredient is itself a batch-tracked finished good (sub-recipe / prep item
+      // consumed as an ingredient), FIFO-deduct from its production batches too.
+      await batchService.deductFromBatches(ing.ingredient_id, currentStore, ing.required_qty_ing_unit);
+
+      const txId = uuidv4();
+      const deductionRemark = remark || `ตัดวัตถุดิบจากการผลิตสูตร ${product.recipe_name || product.name} (${count} Batch = -${ing.required_qty_ing_unit} ${ing.ingredient_unit})`;
+
       await db.run(
-        `INSERT INTO ingredient_stock_transactions (id, ingredient_id, user_id, store_id, type, quantity, remark)
-         VALUES (?, ?, ?, ?, 'production_issue', ?, ?)`,
+        `INSERT INTO ingredient_stock_transactions (id, ingredient_id, user_id, store_id, type, quantity, remark, gr_number, gi_number)
+         VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?)`,
         [
-          uuidv4(), 
+          txId, 
           ing.ingredient_id, 
           req.user?.id || 'system', 
           currentStore, 
           -ing.required_qty_ing_unit, 
-          remark || `ตัดวัตถุดิบจากการผลิตสูตร ${product.recipe_name || product.name} (${count} Batch)`
+          deductionRemark,
+          woNumber,
+          woNumber
+        ]
+      );
+
+      await db.run(
+        `INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark, gr_number, gi_number)
+         VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?)`,
+        [
+          txId,
+          ing.ingredient_id,
+          req.user?.id || 'system',
+          currentStore,
+          -ing.required_qty_ing_unit,
+          deductionRemark,
+          woNumber,
+          woNumber
         ]
       );
     }
@@ -621,6 +656,17 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
       [product_id, currentStore, newProdStock, newProdStock]
     );
 
+    // Record a batch (with computed expiry date, if the product has shelf_life_days configured)
+    // so this production run's stock can be FIFO-tracked and auto-removed after expiry.
+    const batchInfo = await batchService.createBatch({
+      productId: product_id,
+      storeId: currentStore,
+      woId,
+      woNumber,
+      qty: totalProducedYield,
+      unit: yieldUnit
+    });
+
     // If product is also synced as a prep item in ingredients table, update ingredients.quantity too
     const syncedPrepIngredient = await db.get(
       "SELECT id FROM ingredients WHERE id = ?",
@@ -633,31 +679,141 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
       );
     }
 
+    // Calculate total cost of production & prepare WO item records
+    let totalWOCost = 0;
+    for (const reqItem of ingredientRequirements) {
+      const ingCostRow = await db.get(
+        "SELECT cost_per_unit, unit FROM ingredients WHERE id = ? UNION SELECT cost_price as cost_per_unit, unit FROM products WHERE id = ?",
+        [reqItem.ingredient_id, reqItem.ingredient_id]
+      );
+      const ingCostPerUnit = parseFloat(ingCostRow?.cost_per_unit) || 0;
+      const { item_cost } = calculateRecipeItemCost(reqItem.required_qty_recipe_unit, reqItem.recipe_unit, ingCostRow?.unit || reqItem.ingredient_unit, ingCostPerUnit);
+      reqItem.item_cost = Number(item_cost.toFixed(4));
+      totalWOCost += item_cost;
+    }
+    totalWOCost = Number(totalWOCost.toFixed(4));
+
+    // Save Work Order Master Record
+    await db.run(
+      `INSERT INTO work_orders (id, store_id, wo_number, product_id, product_name, batch_count, produced_yield, yield_unit, total_cost, user_id, user_name, remark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        woId,
+        currentStore,
+        woNumber,
+        product_id,
+        product.recipe_name || product.name,
+        count,
+        totalProducedYield,
+        yieldUnit,
+        totalWOCost,
+        req.user?.id || 'system',
+        req.user?.full_name || req.user?.username || 'ผู้ใช้งาน',
+        remark || `ผลิต ${count} Batch (${product.recipe_name || product.name})`
+      ]
+    );
+
+    // Save Work Order Items
+    for (const reqItem of ingredientRequirements) {
+      await db.run(
+        `INSERT INTO work_order_items (id, wo_id, ingredient_id, ingredient_name, quantity, unit, cost)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          uuidv4(),
+          woId,
+          reqItem.ingredient_id,
+          reqItem.name,
+          reqItem.required_qty_recipe_unit,
+          reqItem.recipe_unit,
+          reqItem.item_cost || 0
+        ]
+      );
+    }
+
     // Record stock transaction for finished product yield
     await db.run(
-      `INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark)
-       VALUES (?, ?, ?, ?, 'production_receive', ?, ?)`,
+      `INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark, gr_number)
+       VALUES (?, ?, ?, ?, 'receive', ?, ?, ?)`,
       [
         uuidv4(),
         product_id,
         req.user?.id || 'system',
         currentStore,
         totalProducedYield,
-        remark || `รับเข้าสินค้าจากการผลิตสูตร ${product.recipe_name || product.name} (${count} Batch = +${totalProducedYield} ${yieldUnit})`
+        remark || `รับเข้าสินค้าจากการผลิตสูตร ${product.recipe_name || product.name} (${count} Batch = +${totalProducedYield} ${yieldUnit})`,
+        woNumber
       ]
     );
 
     res.json({
       success: true,
-      message: `ผลิตสูตร "${product.recipe_name || product.name}" สำเร็จ ${count} Batch (ตัดวัตถุดิบ ${ingredientRequirements.length} รายการ และเพิ่มสต็อกสินค้าขาย +${totalProducedYield} ${yieldUnit})`,
+      message: `ผลิตสูตร "${product.recipe_name || product.name}" สำเร็จ (${woNumber}) - ตัดวัตถุดิบ ${ingredientRequirements.length} รายการ และรับเข้าสต็อก +${totalProducedYield} ${yieldUnit}`,
       data: {
+        wo_id: woId,
+        wo_number: woNumber,
         product_id,
         product_name: product.name,
         batch_count: count,
         produced_yield: totalProducedYield,
         yield_unit: yieldUnit,
+        total_cost: totalWOCost,
         new_product_stock: newProdStock,
+        expiry_date: batchInfo?.expiry_date || null,
+        shelf_life_days: batchInfo?.shelf_life_days ?? null,
         ingredients_deducted: ingredientRequirements
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /work-orders - List Work Orders with search filtering
+router.get("/work-orders", authenticate, async (req, res, next) => {
+  try {
+    const currentStore = req.store_id || 'store-1';
+    const { search = '', limit = 100 } = req.query;
+
+    let query = `SELECT wo.*, u.full_name as user_full_name
+                 FROM work_orders wo
+                 LEFT JOIN users u ON wo.user_id = u.id
+                 WHERE (wo.store_id = ? OR wo.store_id IS NULL OR wo.store_id = '')`;
+    const params = [currentStore];
+
+    if (search && search.trim()) {
+      query += ` AND (wo.wo_number LIKE ? OR wo.product_name LIKE ?)`;
+      params.push(`%${search.trim()}%`, `%${search.trim()}%`);
+    }
+
+    query += ` ORDER BY wo.created_at DESC LIMIT ?`;
+    params.push(parseInt(limit) || 100);
+
+    const workOrders = await db.all(query, params);
+    res.json({ success: true, data: workOrders });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /work-orders/:id - Get Work Order detail with itemized ingredients
+router.get("/work-orders/:id", authenticate, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const wo = await db.get("SELECT * FROM work_orders WHERE id = ? OR wo_number = ?", [id, id]);
+    if (!wo) {
+      return next(new AppError("ไม่พบข้อมูล ใบสั่งผลิต (Work Order)", 404));
+    }
+
+    const items = await db.all("SELECT * FROM work_order_items WHERE wo_id = ?", [wo.id]);
+    const batch = await db.get("SELECT expiry_date, produced_at, qty_remaining, status FROM product_batches WHERE wo_id = ?", [wo.id]);
+    res.json({
+      success: true,
+      data: {
+        ...wo,
+        items,
+        expiry_date: batch?.expiry_date || null,
+        batch_status: batch?.status || null,
+        qty_remaining: batch?.qty_remaining ?? null
       }
     });
   } catch (err) {

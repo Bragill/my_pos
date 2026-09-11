@@ -6,6 +6,8 @@ import api from '../services/api';
 import BarcodeScanner from '../components/BarcodeScanner';
 import ScanIcon from '../components/ScanIcon';
 import { formatDate } from '../utils/format';
+import Pagination from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
 export default function OcrPage() {
     const [receipts, setReceipts] = useState([]);
@@ -19,6 +21,9 @@ export default function OcrPage() {
     const [isImageModalOpen, setIsImageModalOpen] = useState(false);
     const [showAddProductModal, setShowAddProductModal] = useState(false);
     const [itemToCreate, setItemToCreate] = useState(null);
+
+    // Receipt history list pagination (resets when a new upload arrives)
+    const receiptsPaging = usePagination(receipts, 10, receipts.length);
 
     const fetchReceipts = async () => {
         setLoading(true);
@@ -474,7 +479,7 @@ export default function OcrPage() {
                             ไม่มีประวัติการอัปโหลด
                         </div>
                     ) : (
-                        receipts.map(r => (
+                        receiptsPaging.paged.map(r => (
                             <button
                                 key={r.id}
                                 onClick={() => viewDetail(r.id)}
@@ -501,6 +506,16 @@ export default function OcrPage() {
                             </button>
                         ))
                     )}
+                    <Pagination
+                        page={receiptsPaging.page}
+                        totalPages={receiptsPaging.totalPages}
+                        perPage={receiptsPaging.perPage}
+                        onPageChange={receiptsPaging.setPage}
+                        onPerPageChange={receiptsPaging.setPerPage}
+                        rangeStart={receiptsPaging.rangeStart}
+                        rangeEnd={receiptsPaging.rangeEnd}
+                        total={receiptsPaging.total}
+                    />
                 </div>
 
                 {/* Receipt Details */}

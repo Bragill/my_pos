@@ -4,22 +4,30 @@ const { authenticate, authorize } = require("../middleware/auth");
 const { v4: uuidv4 } = require("uuid");
 const router = express.Router();
 
-// Auto migration to ensure is_raw_material column exists
-db.run("ALTER TABLE categories ADD COLUMN is_raw_material INTEGER DEFAULT 0").catch(() => {});
+// Auto migration helper to ensure is_raw_material column exists
+let migrationRan = false;
+const ensureSchema = async () => {
+  if (!migrationRan) {
+    migrationRan = true;
+    try { await db.run("ALTER TABLE categories ADD COLUMN is_raw_material INTEGER DEFAULT 0"); } catch (_) {}
+  }
+};
 
 router.get("/", authenticate, async (req, res, next) => {
   try {
+    await ensureSchema();
+    const currentStore = req.store_id || req.user?.store_id || 'store-1';
     const allRows = await db.all(
       `SELECT c.*, COUNT(p.id) as product_count 
        FROM categories c 
-       LEFT JOIN products p ON p.category_id = c.id AND p.is_active = 1 
-       WHERE c.is_active=1 AND (c.store_id=? OR c.store_id IS NULL OR c.store_id='' OR c.store_id='store-1') 
+       LEFT JOIN products p ON p.category_id = c.id AND p.is_active = 1 AND p.store_id = ?
+       WHERE c.is_active=1 AND (c.store_id=? OR c.store_id IS NULL OR c.store_id='') 
        GROUP BY c.id 
        ORDER BY c.sort_order, c.name`,
-      [req.store_id]
+      [currentStore, currentStore]
     );
-    const storeSpecific = allRows.filter(c => c.store_id === req.store_id);
-    const shared = allRows.filter(c => c.store_id !== req.store_id);
+    const storeSpecific = allRows.filter(c => c.store_id === currentStore);
+    const shared = allRows.filter(c => c.store_id !== currentStore);
     const uniqueMap = new Map();
     for (const cat of storeSpecific) {
       if (cat.name) uniqueMap.set(cat.name.trim().toLowerCase(), cat);
@@ -35,6 +43,42 @@ router.get("/", authenticate, async (req, res, next) => {
       is_raw_material: Boolean(c.is_raw_material || c.name === 'วัตถุดิบ' || (c.name && c.name.includes('วัตถุดิบ')))
     }));
     res.json({ success: true, data });
+  } catch(e) { next(e); }
+});
+
+router.get("/:id/stock", authenticate, async (req, res, next) => {
+  try {
+    const currentStore = req.store_id || req.user?.store_id || 'store-1';
+    const cat = await db.get("SELECT * FROM categories WHERE id=?", [req.params.id]);
+    if (!cat) return res.status(404).json({ success: false, message: "ไม่พบหมวดหมู่" });
+
+    // Strict store isolation: category must either belong to current store or be a global template
+    if (cat.store_id && cat.store_id !== currentStore) {
+      return res.status(403).json({ success: false, message: "หมวดหมู่นี้ไม่ใช่ของสาขาปัจจุบัน" });
+    }
+
+    const rows = await db.all(
+      `SELECT p.id, p.sku, p.barcode, p.name, p.unit, p.is_raw_material, p.cost_price, p.selling_price,
+              COALESCE(i.quantity, 0) as quantity, COALESCE(i.reorder_level, 5) as reorder_level,
+              COALESCE(c.name, ?) as category_name
+       FROM products p
+       LEFT JOIN categories c ON p.category_id = c.id
+       LEFT JOIN inventory i ON p.id = i.product_id AND i.store_id = p.store_id
+       WHERE p.is_active = 1 
+         AND p.store_id = ?
+         AND (p.category_id = ? OR (c.name = ? AND c.name IS NOT NULL))
+       ORDER BY p.name`,
+      [cat.name, currentStore, req.params.id, cat.name]
+    );
+
+    res.json({
+      success: true,
+      category: {
+        ...cat,
+        is_raw_material: Boolean(cat.is_raw_material || cat.name === 'วัตถุดิบ' || cat.name.includes('วัตถุดิบ'))
+      },
+      data: rows
+    });
   } catch(e) { next(e); }
 });
 
@@ -83,7 +127,8 @@ router.put("/:id", authenticate, authorize("admin","manager"), async (req, res, 
 
 router.delete("/:id", authenticate, authorize("admin","manager"), async (req, res, next) => {
   try {
-    const check = await db.get("SELECT COUNT(*) as count FROM products WHERE category_id=? AND is_active=1", [req.params.id]);
+    const currentStore = req.store_id || req.user?.store_id || 'store-1';
+    const check = await db.get("SELECT COUNT(*) as count FROM products WHERE category_id=? AND is_active=1 AND store_id=?", [req.params.id, currentStore]);
     if (check && check.count > 0) {
       return res.status(400).json({
         success: false,

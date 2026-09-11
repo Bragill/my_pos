@@ -17,40 +17,35 @@
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 18 + Vite + Tailwind CSS |
-| Backend | Node.js + Express |
-| Database | PostgreSQL |
+| Frontend | React 18 + Vite + Tailwind CSS (Port 5174) |
+| Backend | Cloudflare Workers (Serverless Edge Express) |
+| Database | Cloudflare D1 (Cloud SQLite Engine) |
+| Storage | Cloudflare R2 |
 | Offline | IndexedDB + Service Worker |
 | PWA | vite-plugin-pwa |
 
 ## 🚀 เริ่มต้นใช้งาน
 
-### 1. ตั้งค่าฐานข้อมูล PostgreSQL
+> ⚠️ **ข้อกำหนดสำคัญ (Strict Backend Policy)**:
+> Backend ของระบบรันอยู่บน **Cloudflare Workers 100%** (`https://pos-backend.bragill2012.workers.dev`) และใช้ **Cloudflare D1**
+> **ห้ามรันคำสั่ง Local Backend (`node src/server.js`, `npm run dev` ใน backend)** บนเครื่องคอมพิวเตอร์เด็ดขาด เว้นแต่กรณีที่ Cloudflare ล่มหรือไม่สามารถใช้งานได้ (หาก Cloudflare กลับมาใช้งานได้ ให้สั่ง Deploy ขึ้น Cloudflare อีกครั้งและปิด Local Backend ทันที)
 
-```sql
-CREATE DATABASE pos_system;
-```
-
-### 2. Backend
-
-```bash
-cd backend
-cp .env.example .env    # แก้ไข DB credentials
-npm install
-npm run db:migrate      # สร้างตาราง
-npm run db:seed         # ข้อมูลเริ่มต้น
-npm run dev             # รันที่ port 3000
-```
-
-### 3. Frontend
+### 1. Frontend (เครื่อง Local)
 
 ```bash
 cd frontend
 npm install
-npm run dev             # รันที่ port 5173
+npm run dev             # รันที่ port 5174 (Proxy ส่ง /api/* ขึ้น Cloudflare Workers อัตโนมัติ)
 ```
 
-### 4. เข้าสู่ระบบ
+### 2. Backend Deployment (Cloudflare Workers)
+
+```bash
+cd backend
+npx wrangler deploy     # Deploy ตรงขึ้น Cloudflare Workers
+```
+
+### 3. เข้าสู่ระบบ
 
 - **Username:** admin
 - **Password:** admin1234
@@ -102,3 +97,13 @@ npm run dev             # รันที่ port 5173
 | GET | `/api/reports/top-products` | สินค้าขายดี |
 | POST | `/api/shifts/open` | เปิดกะ |
 | POST | `/api/shifts/close` | ปิดกะ |
+
+## 🐴 Ponytail Guidelines (Lazy Senior Dev Mode)
+
+โครงการนี้ใช้หลักการ **Ponytail (Lazy Senior Developer)** โดย DietrichGebert เพื่อป้องกัน Over-engineering และควบคุมให้ Agent เขียนโค้ดกระชับ ปลอดภัย และมีประสิทธิภาพสูงสุด:
+
+1. **YAGNI (You Ain't Gonna Need It)**: ไม่สร้างระบบหรือ Abstraction ที่ไม่ได้ร้องขอ
+2. **Reuse First**: ใช้งาน Helper, Util หรือ Pattern ที่มีใน Codebase ก่อนเสมอ
+3. **Shortest Working Diff**: เลือกแนวทางที่แก้ปัญหาที่ Root Cause ด้วย Code Diff ที่สั้นและเรียบง่ายที่สุด
+4. **Deletion > Addition**: เน้นลดความซับซ้อนและการลบ Code ขยะออกมากกว่าการเพิ่มส่วนเกิน
+

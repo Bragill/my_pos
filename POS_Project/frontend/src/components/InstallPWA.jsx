@@ -51,12 +51,10 @@ const InstallPWA = () => {
   if (!showPrompt) return null;
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-50 animate-bounce-in">
+    <div className="fixed bottom-4 left-4 right-4 z-50 animate-fade-in">
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-xl">
-            P
-          </div>
+          <img src="/icons/icon-192.png" alt="POS" className="w-12 h-12 rounded-xl shadow" />
           <div>
             <h3 className="font-bold text-slate-900">ติดตั้งแอป POS</h3>
             <p className="text-xs text-slate-500">ใช้งานสะดวกและรวดเร็วยิ่งขึ้น</p>

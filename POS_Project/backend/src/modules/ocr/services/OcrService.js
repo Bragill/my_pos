@@ -3,7 +3,12 @@ const StorageService = require('./StorageService');
 const MockOcrProvider = require('../providers/MockOcrProvider');
 const GeminiOcrProvider = require('../providers/GeminiOcrProvider');
 const db = require('../../../database/dbHelper');
-const sharp = require('sharp');
+let sharp;
+try {
+    sharp = require('sharp');
+} catch (e) {
+    // Sharp is optional in serverless/edge environments
+}
 
 class OcrService {
     constructor() {
@@ -20,26 +25,28 @@ class OcrService {
         let mimetype = file.mimetype;
 
         // --- Image Optimization for OCR & Storage ---
-        try {
-            console.log('[OCR] Optimizing image...');
-            const image = sharp(file.buffer).rotate();
-            const metadata = await image.metadata();
-            
-            processedBuffer = await image
-                .resize({ width: 1800, withoutEnlargement: true, fit: 'inside' })
-                .modulate({ brightness: 1.05, contrast: 1.2 }) // Slightly boost contrast for text
-                .gamma(1.1) // Better tonal range for OCR
-                .jpeg({ 
-                    quality: 82, 
-                    progressive: true, 
-                    optimizeScans: true 
-                })
-                .toBuffer();
-            
-            mimetype = 'image/jpeg';
-            console.log(`[OCR] Image optimized: ${metadata.width}x${metadata.height} -> 1800w (max), Size: ${Math.round(processedBuffer.length / 1024)}KB`);
-        } catch (error) {
-            console.warn('[OCR] Optimization failed, using original:', error.message);
+        if (sharp) {
+            try {
+                console.log('[OCR] Optimizing image...');
+                const image = sharp(file.buffer).rotate();
+                const metadata = await image.metadata();
+                
+                processedBuffer = await image
+                    .resize({ width: 1800, withoutEnlargement: true, fit: 'inside' })
+                    .modulate({ brightness: 1.05, contrast: 1.2 }) // Slightly boost contrast for text
+                    .gamma(1.1) // Better tonal range for OCR
+                    .jpeg({ 
+                        quality: 82, 
+                        progressive: true, 
+                        optimizeScans: true 
+                    })
+                    .toBuffer();
+                
+                mimetype = 'image/jpeg';
+                console.log(`[OCR] Image optimized: ${metadata.width}x${metadata.height} -> 1800w (max), Size: ${Math.round(processedBuffer.length / 1024)}KB`);
+            } catch (error) {
+                console.warn('[OCR] Optimization failed, using original:', error.message);
+            }
         }
 
         // 1. Upload to Storage

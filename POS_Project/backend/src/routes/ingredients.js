@@ -3,6 +3,7 @@ const db = require("../database/dbHelper");
 const { authenticate, authorize } = require("../middleware/auth");
 const { AppError } = require("../middleware/errorHandler");
 const { v4: uuidv4 } = require("uuid");
+const batchService = require("../services/batchService");
 const router = express.Router();
 
 function normalizeUnitKey(unitStr) {
@@ -170,7 +171,7 @@ router.get("/:id", authenticate, async (req, res, next) => {
       `SELECT t.*, u.full_name as user_name 
        FROM ingredient_stock_transactions t 
        LEFT JOIN users u ON t.user_id = u.id 
-       WHERE t.ingredient_id = ? AND (t.store_id = ? OR t.store_id IS NULL OR t.store_id = 'store-1') 
+       WHERE t.ingredient_id = ? AND (t.store_id = ? OR t.store_id IS NULL OR t.store_id = '') 
        ORDER BY t.created_at DESC LIMIT 50`,
       [req.params.id, req.store_id]
     );
@@ -246,7 +247,7 @@ router.put("/:id", authenticate, authorize("admin", "manager"), async (req, res,
   try {
     const { sku, name, unit, cost_per_unit, reorder_level } = req.body;
     const existing = await db.get(
-      "SELECT * FROM ingredients WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = 'store-1')",
+      "SELECT * FROM ingredients WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
       [req.params.id, req.store_id]
     );
 
@@ -267,7 +268,9 @@ router.put("/:id", authenticate, authorize("admin", "manager"), async (req, res,
 
     // Sync to product
     await db.run(
-      `UPDATE products SET sku = ?, name = ?, unit = ?, cost_price = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?`,
+      `UPDATE products 
+       SET sku = ?, name = ?, unit = ?, cost_price = ?, updated_at = datetime('now', '+7 hours')
+       WHERE id = ?`,
       [updatedSku, updatedName, updatedUnit, updatedCost, req.params.id]
     );
 
@@ -278,18 +281,16 @@ router.put("/:id", authenticate, authorize("admin", "manager"), async (req, res,
   }
 });
 
-// POST adjust stock for ingredient (Admin/Manager)
+// POST adjust ingredient stock
 router.post("/:id/adjust", authenticate, authorize("admin", "manager"), async (req, res, next) => {
   try {
-    const { quantity_change, type = "adjust", remark } = req.body;
-    const change = parseFloat(quantity_change);
-
-    if (isNaN(change) || change === 0) {
-      return next(new AppError("จำนวนที่ปรับเปลี่ยนไม่ถูกต้อง", 400));
+    const { change, type = "adjustment", remark } = req.body;
+    if (change === undefined || change === 0) {
+      return next(new AppError("กรุณาระบุจำนวนที่ต้องการปรับปรุง", 400));
     }
 
     const existing = await db.get(
-      "SELECT * FROM ingredients WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = 'store-1')",
+      "SELECT * FROM ingredients WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
       [req.params.id, req.store_id]
     );
 
@@ -313,6 +314,10 @@ router.post("/:id/adjust", authenticate, authorize("admin", "manager"), async (r
       [uuidv4(), req.params.id, req.user.id, req.store_id, type, change, remark || "ปรับปรุงสต็อกวัตถุดิบ"]
     );
 
+    if (change < 0) {
+      await batchService.deductFromBatches(req.params.id, req.store_id, -change);
+    }
+
     const updated = await db.get("SELECT * FROM ingredients WHERE id = ?", [req.params.id]);
     res.json({ success: true, data: updated });
   } catch (err) {
@@ -324,7 +329,7 @@ router.post("/:id/adjust", authenticate, authorize("admin", "manager"), async (r
 router.delete("/:id", authenticate, authorize("admin", "manager"), async (req, res, next) => {
   try {
     const existing = await db.get(
-      "SELECT * FROM ingredients WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = 'store-1')",
+      "SELECT * FROM ingredients WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
       [req.params.id, req.store_id]
     );
 

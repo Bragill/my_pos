@@ -31,4 +31,38 @@ async function generatePONumber(storeId) {
   return `${prefix}${paddedSeq}`;
 }
 
-module.exports = { generatePONumber };
+/**
+ * Generate GI Number (Goods Issue) in GI-YYYYMM0000 format (e.g. GI-2026090001)
+ * Starts from 1 per month, 0-padded to 4 digits.
+ * @param {string} storeId 
+ * @returns {Promise<string>}
+ */
+async function generateGINumber(storeId) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const prefix = `GI-${year}${month}`;
+
+  const row = await db.get(
+    `SELECT gi_number FROM stock_transactions WHERE store_id = ? AND gi_number LIKE ? ORDER BY gi_number DESC LIMIT 1`,
+    [storeId, `${prefix}%`]
+  );
+
+  let nextSeq = 1;
+  if (row && row.gi_number) {
+    const seqStr = row.gi_number.replace(prefix, '');
+    const currentSeq = parseInt(seqStr, 10);
+    if (!isNaN(currentSeq)) {
+      nextSeq = currentSeq + 1;
+    }
+  }
+
+  const paddedSeq = String(nextSeq).padStart(4, '0');
+  return `${prefix}${paddedSeq}`;
+}
+
+async function generateGRNumber(storeId) {
+  return generateGINumber(storeId);
+}
+
+module.exports = { generatePONumber, generateGRNumber, generateGINumber };

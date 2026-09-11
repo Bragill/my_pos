@@ -10,7 +10,7 @@ import NetworkStatusIndicator, { OfflineTopBanner } from './NetworkStatusIndicat
 
 const navItems = [
   { path: '/pos', label: 'หน้าขาย', icon: '🛒', moduleKey: 'pos', roles: ['admin', 'manager', 'cashier'] },
-  { path: '/sales', label: 'ประวัติการขาย', icon: '📜', moduleKey: 'sales', roles: ['admin', 'manager', 'cashier'] },
+  { path: '/sales', label: 'ประวัติการซื้อ/ขาย', icon: '📜', moduleKey: 'sales', roles: ['admin', 'manager', 'cashier'] },
   { path: '/dashboard', label: 'แดชบอร์ด', icon: '📊', moduleKey: 'dashboard', roles: ['admin', 'manager'] },
   { path: '/products', label: 'สินค้า', icon: '📦', moduleKey: 'products', roles: ['admin', 'manager'] },
   { path: '/inventory', label: 'สต๊อก', icon: '🏪', moduleKey: 'inventory', roles: ['admin', 'manager'] },

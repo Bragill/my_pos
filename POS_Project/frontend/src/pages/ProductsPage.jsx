@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
-import { formatCurrency } from '../utils/format';
+import { formatCurrency, formatQty } from '../utils/format';
 import api from '../services/api';
 import toast from 'react-hot-toast';
+import Pagination from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 import BarcodeScanner from '../components/BarcodeScanner';
 import ScanIcon from '../components/ScanIcon';
 
@@ -419,6 +421,8 @@ export default function ProductsPage() {
     p.barcode?.includes(search)
   );
 
+  const productsPaging = usePagination(filtered, 20, search);
+
   const editingCurrentCost = editingProduct ? Number(editingProduct.cost_price) || 0 : 0;
   const editingPendingCost = editingProduct && editingProduct.pending_cost_price !== null && editingProduct.pending_cost_price !== undefined && editingProduct.pending_cost_price !== ''
     ? Number(editingProduct.pending_cost_price)
@@ -465,7 +469,7 @@ export default function ProductsPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((product) => (
+            {productsPaging.paged.map((product) => (
               <tr key={product.id} className="border-b border-gray-50 hover:bg-gray-50">
                 <td className="py-2 px-2 text-gray-600">{product.sku}</td>
                 <td className="py-2 px-2 font-medium">
@@ -498,7 +502,7 @@ export default function ProductsPage() {
                   {product.is_raw_material ? <span className="text-gray-400 font-normal text-xs">ไม่ขายหน้าร้าน</span> : formatCurrency(product.selling_price)}
                 </td>
                 <td className={`py-2 px-2 text-right font-semibold ${product.stock_quantity <= 5 ? 'text-red-500' : 'text-green-600'}`}>
-                  {product.stock_quantity}
+                  {formatQty(product.stock_quantity)}
                 </td>
                 <td className="py-2 px-2">
                   <div className="flex items-center gap-2">
@@ -526,6 +530,16 @@ export default function ProductsPage() {
             ))}
           </tbody>
         </table>
+        <Pagination
+          page={productsPaging.page}
+          totalPages={productsPaging.totalPages}
+          perPage={productsPaging.perPage}
+          onPageChange={productsPaging.setPage}
+          onPerPageChange={productsPaging.setPerPage}
+          rangeStart={productsPaging.rangeStart}
+          rangeEnd={productsPaging.rangeEnd}
+          total={productsPaging.total}
+        />
       </div>
 
       {/* Modal ฟอร์ม */}
@@ -978,7 +992,7 @@ export default function ProductsPage() {
                           <span>หมวด: {p.category_name || '—'}</span>
                           <span>ต้นทุน: ฿{p.cost_price}</span>
                           <span>ราคาขาย: ฿{p.selling_price}</span>
-                          <span>สต๊อก: {p.stock_quantity}</span>
+                          <span>สต๊อก: {formatQty(p.stock_quantity)}</span>
                         </div>
                         <p className="text-xs text-gray-300 mt-0.5">ลบเมื่อ: {p.updated_at?.slice(0,16)}</p>
                       </div>

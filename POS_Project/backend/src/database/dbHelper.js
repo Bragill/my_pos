@@ -12,6 +12,19 @@ const d1HttpAgent = new http.Agent({ keepAlive: true, maxSockets: D1_MAX_CONCURR
 let active = 0;
 const waiters = [];
 
+let workerBindings = null;
+
+function setWorkerBindings(env) {
+  workerBindings = env;
+  if (env?.DB) {
+    globalThis.__D1_DB__ = env.DB;
+  }
+}
+
+function getWorkerBindings() {
+  return workerBindings;
+}
+
 function acquire() {
   if (active < D1_MAX_CONCURRENT) {
     active++;
@@ -35,6 +48,34 @@ function release() {
 }
 
 async function queryD1(sql, params = [], retryCount = 0) {
+  // 1. Edge Mode: If running on Cloudflare Workers with native D1 binding
+  const nativeDb = workerBindings?.DB || (typeof globalThis !== 'undefined' && globalThis.__D1_DB__);
+  if (nativeDb) {
+    try {
+      const stmt = nativeDb.prepare(sql).bind(...params);
+      const isSelect = /^\s*(SELECT|PRAGMA)/i.test(sql);
+      if (isSelect) {
+        const res = await stmt.all();
+        return {
+          results: res.results || []
+        };
+      } else {
+        const res = await stmt.run();
+        return {
+          results: [],
+          meta: {
+            changes: res.meta?.changes || 0,
+            last_row_id: res.meta?.last_row_id || null
+          }
+        };
+      }
+    } catch (err) {
+      console.error(`[D1 Native Error] ${err.message}: ${sql.substring(0, 80)}`);
+      throw err;
+    }
+  }
+
+  // 2. Node.js Mode: Fall back to Cloudflare D1 HTTP REST API for local dev
   const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
   const DATABASE_ID = process.env.CLOUDFLARE_DATABASE_ID;
   const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
@@ -62,9 +103,6 @@ async function queryD1(sql, params = [], retryCount = 0) {
       }
     );
 
-    const duration = Date.now() - startTime;
-    // console.log(`[D1 Query] ${duration}ms: ${sql.substring(0, 50)}${sql.length > 50 ? '...' : ''}`);
-
     if (!response.data.success) {
       throw new Error(response.data.errors[0]?.message || 'D1 API Error');
     }
@@ -88,7 +126,6 @@ async function queryD1(sql, params = [], retryCount = 0) {
     let errorMessage = err.message;
     if (err.response && err.response.data && err.response.data.errors) {
       errorMessage = `D1 Error: ${err.response.data.errors[0].message}`;
-      // console.error('D1 API Response Error:', JSON.stringify(err.response.data, null, 2));
     }
     
     console.error(`[D1 Error] ${duration}ms: ${errorMessage}`);
@@ -99,7 +136,11 @@ async function queryD1(sql, params = [], retryCount = 0) {
 }
 
 async function init() {
-  console.log('Connected to Cloudflare D1 via API');
+  if (workerBindings?.DB) {
+    console.log('Connected to Cloudflare D1 via native Worker binding');
+  } else {
+    console.log('Connected to Cloudflare D1 via HTTP REST API');
+  }
 }
 
 async function get(sql, params = []) {
@@ -120,4 +161,4 @@ async function run(sql, params = []) {
   };
 }
 
-module.exports = { init, get, all, run };
+module.exports = { init, get, all, run, setWorkerBindings, getWorkerBindings };

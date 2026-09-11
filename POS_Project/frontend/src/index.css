@@ -242,3 +242,22 @@ html.dark select option {
   background-color: #1e293b;
   color: #f1f5f9;
 }
+
+/* ── Dashboard stat tones: vivid on light, brightened on dark ── */
+.stat-value { color: var(--sc); }
+html.dark .stat-value { color: var(--sc-dark, var(--sc)); }
+
+.t-revenue { color: #3300FC; }
+html.dark .t-revenue { color: #818CF8; }
+
+.t-cost { color: #95008A; }
+html.dark .t-cost { color: #E879F9; }
+
+.t-profit { color: #16a34a; }
+html.dark .t-profit { color: #4ADE80; }
+
+.t-loss { color: #EB0000; }
+html.dark .t-loss { color: #F87171; }
+
+.t-muted { color: #6b7280; }
+html.dark .t-muted { color: #CBD5E1; }
