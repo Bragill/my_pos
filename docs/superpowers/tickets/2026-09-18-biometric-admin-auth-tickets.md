@@ -161,20 +161,21 @@ flowchart TD
 - **Description**:
   Add biometric sign-in button and 2FA Quick PIN dialog to `LoginPage.jsx` while strictly respecting device security locks.
 - **Implementation Checklist**:
-  - [ ] If `isBiometricsAvailable()` is true, display biometric option:
+  - [x] If `isBiometricsAvailable()` is true, display biometric option:
     `🧬 สแกน Face ID / ลายนิ้วมือ (ผู้จัดการ)`.
-  - [ ] On click:
+  - [x] On click:
     - Call `biometricsAPI.getLoginOptions({ mac_address })`.
     - Trigger `navigator.credentials.get()`.
     - Upon biometric success, open Quick PIN modal (4 digits).
     - Call `biometricsAPI.verifyLogin({ ..., quick_pin })`.
     - On success: Store token and redirect to `/pos`.
-  - [ ] Security locks:
-    - If `deviceStatus.locked` is true, disable button completely.
+  - [x] Security locks:
+    - If `deviceStatus.locked` is true, disable button completely and show live countdown timer.
+  - [x] Verified with production frontend build (`npm run build`).
 - **Acceptance Criteria**:
-  - Tapping the biometric button opens the device's native Face ID / Fingerprint sheet.
-  - After scanning, entering the Quick PIN immediately logs the manager into the POS.
-  - If the device is locked (`LOCKED_TEMP`), the button is disabled and displays the countdown timer.
+  - [x] Tapping the biometric button opens the device's native Face ID / Fingerprint sheet.
+  - [x] After scanning, entering the Quick PIN immediately logs the manager into the POS.
+  - [x] If the device is locked (`LOCKED_TEMP`), the button is disabled and displays the countdown timer.
 
 ---
 

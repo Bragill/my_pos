@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { securityAPI } from '../services/api';
+import { securityAPI, biometricsAPI } from '../services/api';
 import { getDeviceMacAddress, detectBotSignals } from '../utils/deviceFingerprint';
+import { isBiometricsAvailable, startBiometricAuthentication } from '../utils/webAuthnHelper';
 import toast from 'react-hot-toast';
 
 // ─── Step constants ────────────────────────────────────────────────
@@ -64,6 +65,13 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState(STEP_AUTH);
   const [pendingStores, setPendingStores] = useState([]);   // stores returned after auth
+
+  // Biometric & 2FA Quick PIN state
+  const [biometricsSupported, setBiometricsSupported] = useState(false);
+  const [bioAssertion, setBioAssertion] = useState(null);
+  const [quickPinModalOpen, setQuickPinModalOpen] = useState(false);
+  const [quickPin, setQuickPin] = useState('');
+  const [quickPinLoading, setQuickPinLoading] = useState(false);
   
   // Security & Lockout state — initialized synchronously from localStorage to prevent flash of unlocked UI
   const [macAddress, setMacAddress] = useState('');
@@ -81,7 +89,7 @@ export default function LoginPage() {
   const [hpToken, setHpToken] = useState(''); // Invisible Honeypot field
   const renderTimeRef = useRef(Date.now());
 
-  const { login, pinLogin, selectStore } = useAuth();
+  const { login, pinLogin, selectStore, setAuthSession } = useAuth();
   const navigate = useNavigate();
 
   const saveLockInfo = (status, lockUntil, reason) => {
@@ -138,6 +146,7 @@ export default function LoginPage() {
     };
 
     verifyDevice();
+    isBiometricsAvailable().then(avail => setBiometricsSupported(Boolean(avail)));
   }, []);
 
   // ─── Wall-clock countdown timer for temporary lock ───────────────
@@ -321,6 +330,88 @@ export default function LoginPage() {
     }
   };
 
+  // ─── Biometric login (Face ID / Fingerprint) ──────────────────────
+  const handleBiometricLogin = async () => {
+    if (deviceStatus.locked) return;
+    setLoading(true);
+    try {
+      // 1. Fetch options & enrolled credentials for current device MAC
+      const optionsRes = await biometricsAPI.getLoginOptions({ mac_address: macAddress });
+      if (!optionsRes.data?.success || !optionsRes.data?.data) {
+        throw new Error(optionsRes.data?.message || 'ไม่สามารถขอข้อมูลการยืนยันตัวตนชีวมาตรได้');
+      }
+
+      const options = optionsRes.data.data;
+      if (!options.allowCredentials || options.allowCredentials.length === 0) {
+        toast.error('ไม่พบบัญชีผู้จัดการที่ลงทะเบียน Face ID/ลายนิ้วมือ บนเครื่องนี้ กรุณาเข้าสู่ระบบด้วยรหัสผ่านก่อนเพื่อเปิดใช้งาน');
+        return;
+      }
+
+      // 2. Prompt native hardware dialog
+      const assertionData = await startBiometricAuthentication(options);
+
+      // 3. Hardware scan successful -> prompt Quick PIN dialog for 2FA
+      setBioAssertion(assertionData);
+      setQuickPin('');
+      setQuickPinModalOpen(true);
+    } catch (err) {
+      if (err.name === 'NotAllowedError' || err.message?.includes('ยกเลิก')) {
+        toast('ยกเลิกการสแกนชีวมาตร', { icon: 'ℹ️' });
+      } else {
+        handleSecurityError(err);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ─── Quick PIN handling (2FA step after biometric assertion) ───────
+  const handleQuickPinPress = (digit) => {
+    if (quickPin.length >= 6 || deviceStatus.locked || quickPinLoading) return;
+    const newPin = quickPin + digit;
+    setQuickPin(newPin);
+    if (newPin.length === 6) {
+      handleQuickPinSubmit(newPin);
+    }
+  };
+
+  const handleQuickPinSubmit = async (pinValue) => {
+    const pinToVerify = pinValue || quickPin;
+    if (!pinToVerify || pinToVerify.length < 4 || !bioAssertion) return;
+
+    setQuickPinLoading(true);
+    try {
+      const payload = {
+        mac_address: macAddress,
+        credential_id: bioAssertion.credential_id,
+        authenticator_data: bioAssertion.authenticator_data,
+        client_data_json: bioAssertion.client_data_json,
+        signature: bioAssertion.signature,
+        quick_pin: pinToVerify
+      };
+
+      const res = await biometricsAPI.verifyLogin(payload);
+      if (res.data?.success && res.data?.data) {
+        setQuickPinModalOpen(false);
+        setBioAssertion(null);
+        setQuickPin('');
+        const { userStores } = setAuthSession(res.data.data);
+        handleAuthSuccess(userStores);
+      } else {
+        throw new Error(res.data?.message || 'การยืนยันรหัส PIN 2FA ไม่ถูกต้อง');
+      }
+    } catch (err) {
+      setQuickPin('');
+      handleSecurityError(err);
+      if (err.response?.status === 429 || err.response?.status === 403) {
+        setQuickPinModalOpen(false);
+        setBioAssertion(null);
+      }
+    } finally {
+      setQuickPinLoading(false);
+    }
+  };
+
   // ─── Store selection via card click ─────────────────────────────
   const handleSelectStore = (storeId) => {
     try {
@@ -332,10 +423,25 @@ export default function LoginPage() {
     }
   };
 
-  // ─── Keyboard support for PIN mode ──────────────────────────────
+  // ─── Keyboard support for PIN mode and Quick PIN modal ───────────
   useEffect(() => {
-    if (step !== STEP_AUTH || deviceStatus.locked) return;
+    if (deviceStatus.locked) return;
+
     const handleKeyDown = (e) => {
+      if (quickPinModalOpen) {
+        if (e.key >= '0' && e.key <= '9') {
+          handleQuickPinPress(e.key);
+        } else if (e.key === 'Backspace') {
+          setQuickPin(prev => prev.slice(0, -1));
+        } else if (e.key === 'Escape') {
+          setQuickPinModalOpen(false);
+          setBioAssertion(null);
+          setQuickPin('');
+        }
+        return;
+      }
+
+      if (step !== STEP_AUTH) return;
       if (mode === 'pin') {
         if (e.key >= '0' && e.key <= '9') {
           handlePinPress(e.key);
@@ -346,7 +452,7 @@ export default function LoginPage() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [mode, pin, step, deviceStatus.locked]);
+  }, [mode, pin, step, deviceStatus.locked, quickPinModalOpen, quickPin]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
@@ -466,6 +572,37 @@ export default function LoginPage() {
         {/* ══════════════════════════════════════════ STEP: AUTH */}
         {step === STEP_AUTH && (
           <>
+            {/* Biometric 2FA Login Option (Admin / Manager) */}
+            {biometricsSupported && (
+              <div className="mb-5">
+                <button
+                  type="button"
+                  onClick={handleBiometricLogin}
+                  disabled={loading || deviceStatus.locked}
+                  className={`w-full py-3.5 px-4 rounded-2xl font-bold text-xs sm:text-sm text-white shadow-xl transition-all flex items-center justify-center gap-2.5 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border border-white/30 hover:border-white/50 ${
+                    deviceStatus.locked ? 'bg-white/10' : 'hover:shadow-indigo-500/40'
+                  }`}
+                  style={{
+                    background: deviceStatus.locked
+                      ? 'rgba(255,255,255,0.1)'
+                      : 'linear-gradient(135deg, rgba(79, 70, 229, 0.9) 0%, rgba(124, 58, 237, 0.9) 100%)'
+                  }}
+                >
+                  <span className="text-xl">🧬</span>
+                  <span>
+                    {deviceStatus.locked
+                      ? `🔒 ระบบหน่วงเวลา (${formatCountdown(deviceStatus.remainingSeconds)})`
+                      : 'สแกน Face ID / ลายนิ้วมือ (ผู้จัดการ)'}
+                  </span>
+                </button>
+                <div className="flex items-center gap-2 mt-4 text-white/40 text-[11px] font-medium">
+                  <div className="flex-1 h-px bg-white/20"></div>
+                  <span>หรือเข้าสู่ระบบด้วย</span>
+                  <div className="flex-1 h-px bg-white/20"></div>
+                </div>
+              </div>
+            )}
+
             {/* Mode Toggle */}
             <div className="flex bg-white/10 rounded-2xl p-1 mb-6 border border-white/20">
               {[['pin', '🔢 PIN (6 หลัก)'], ['password', '🔑 รหัสผ่าน']].map(([val, label]) => (
@@ -561,6 +698,87 @@ export default function LoginPage() {
           </>
         )}
       </div>
+
+      {/* ══════════════════════════════════════════ 2FA QUICK PIN MODAL */}
+      {quickPinModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-xs bg-slate-900/95 border border-indigo-500/30 rounded-3xl p-6 text-white shadow-2xl animate-scale-up">
+            <div className="text-center mb-5">
+              <div className="w-14 h-14 mx-auto mb-2 rounded-2xl bg-indigo-600/30 border border-indigo-400/40 flex items-center justify-center text-2xl shadow-inner">
+                🧬
+              </div>
+              <h3 className="text-base font-bold text-white">ยืนยันรหัส Quick PIN</h3>
+              <p className="text-xs text-indigo-200/80 mt-0.5">
+                สแกนชีวมาตรผ่านแล้ว กรุณากรอกรหัส PIN เพื่อเข้าสู่ระบบ
+              </p>
+            </div>
+
+            {/* PIN Dots (4 to 6 digits) */}
+            <div className="flex justify-center gap-2 mb-6">
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <div
+                  key={i}
+                  className={`w-9 h-11 rounded-xl flex items-center justify-center text-lg font-bold border transition-all ${
+                    quickPin.length > i
+                      ? 'border-indigo-400 bg-indigo-500/30 text-white shadow-sm scale-105'
+                      : 'border-white/20 bg-white/5 text-white/20'
+                  }`}
+                >
+                  {quickPin[i] ? '●' : '○'}
+                </div>
+              ))}
+            </div>
+
+            {/* Keypad */}
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => {
+                    if (quickPinLoading) return;
+                    if (key === 'del') setQuickPin((p) => p.slice(0, -1));
+                    else if (key !== null) handleQuickPinPress(String(key));
+                  }}
+                  disabled={key === null || quickPinLoading}
+                  className={`h-12 rounded-xl text-lg font-bold transition-all active:scale-95 cursor-pointer ${
+                    key === null
+                      ? 'invisible'
+                      : key === 'del'
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:bg-rose-500/30'
+                      : 'bg-white/10 text-white border border-white/15 hover:bg-white/20'
+                  }`}
+                >
+                  {key === 'del' ? '⌫' : key}
+                </button>
+              ))}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setQuickPinModalOpen(false);
+                  setBioAssertion(null);
+                  setQuickPin('');
+                }}
+                disabled={quickPinLoading}
+                className="flex-1 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold text-white/80 transition-colors cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={() => handleQuickPinSubmit(quickPin)}
+                disabled={quickPin.length < 4 || quickPinLoading}
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold text-white shadow-lg transition-all cursor-pointer"
+              >
+                {quickPinLoading ? 'กำลังตรวจสอบ...' : 'เข้าสู่ระบบ'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

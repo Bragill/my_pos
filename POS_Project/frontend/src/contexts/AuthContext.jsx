@@ -53,6 +53,17 @@ export function AuthProvider({ children }) {
     return { userData, userStores };
   };
 
+  const setAuthSession = (authData) => {
+    const { token, user: userData, stores: userStores } = authData;
+    localStorage.setItem('pos_token', token);
+    localStorage.setItem('pos_user', JSON.stringify(userData));
+    localStorage.setItem('pos_available_stores', JSON.stringify(userStores));
+    
+    setUser(userData);
+    setStores(userStores);
+    return { userData, userStores };
+  };
+
   const pinLogin = async (pin, extraPayload = {}) => {
     const res = await api.post('/auth/pin-login', { pin, ...extraPayload });
     const { token, user: userData, stores: userStores } = res.data.data;
@@ -183,6 +194,7 @@ export function AuthProvider({ children }) {
       activeStore, 
       login, 
       pinLogin, 
+      setAuthSession,
       logout, 
       switchStore, 
       selectStore,
