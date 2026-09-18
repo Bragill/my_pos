@@ -103,6 +103,17 @@ export const securityAPI = {
   deleteDevice: (id) => api.delete(`/settings/devices/${id}`),
 };
 
+// Biometrics API methods (Face ID / Fingerprint / WebAuthn)
+export const biometricsAPI = {
+  getRegisterOptions: () => api.post('/biometrics/register-options'),
+  verifyRegistration: (data) => api.post('/biometrics/register-verify', data),
+  getMyCredentials: () => api.get('/biometrics/my-credentials'),
+  deleteCredential: (id) => api.delete(`/biometrics/credentials/${id}`),
+  getLoginOptions: (data = {}) => api.post('/biometrics/login-options', data),
+  verifyLogin: (data) => api.post('/biometrics/login-verify', data),
+};
+
 export default api;
+
 
 

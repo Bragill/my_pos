@@ -115,13 +115,15 @@ flowchart TD
 - **Description**:
   Build client-side WebAuthn wrapper utilities to interact with browser native platform authenticators and encode binary payloads.
 - **Implementation Checklist**:
-  - [ ] `isBiometricsAvailable()`: Checks `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`.
-  - [ ] `base64URLToBuffer` and `bufferToBase64URL` binary encoders.
-  - [ ] `startBiometricRegistration(options)`: Wrapper for `navigator.credentials.create()`.
-  - [ ] `startBiometricAuthentication(options)`: Wrapper for `navigator.credentials.get()`.
-  - [ ] Add `biometricsAPI` methods to `api.js`.
+  - [x] `isBiometricsAvailable()`: Checks `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`.
+  - [x] `base64URLToBuffer` and `bufferToBase64URL` binary encoders.
+  - [x] `startBiometricRegistration(options)`: Wrapper for `navigator.credentials.create()`.
+  - [x] `startBiometricAuthentication(options)`: Wrapper for `navigator.credentials.get()`.
+  - [x] Add `biometricsAPI` methods to `api.js`.
+  - [x] Unit test suite created and passing (`src/utils/webAuthnHelper.test.js`).
+  - [x] Verified with production frontend build (`npm run build`).
 - **Acceptance Criteria**:
-  - Helper functions handle cross-browser binary formatting cleanly without throwing unhandled exceptions.
+  - [x] Helper functions handle cross-browser binary formatting cleanly without throwing unhandled exceptions.
 
 ---
 
