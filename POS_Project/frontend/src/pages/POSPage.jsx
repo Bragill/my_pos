@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useCart } from "../contexts/CartContext";
 import { useAuth } from "../contexts/AuthContext";
 import { formatCurrency } from "../utils/format";
@@ -11,7 +11,10 @@ import toast from "react-hot-toast";
 import BarcodeScanner from "../components/BarcodeScanner";
 import ScanIcon from "../components/ScanIcon";
 import hardwareScanner from "../services/hardwareScannerService";
-import { printReceipt, connectUsb, connectBluetooth, isPrinterAvailable } from "../services/thermalPrinterService";
+import { printReceipt, isPrinterAvailable } from "../services/thermalPrinterService";
+import { canMaintainModule } from "../utils/permissions";
+
+const isDeductEnabled = (v) => v === 1 || v === true || v === '1';
 
 const CartItem = ({ item, onUpdateQuantity, onRemove }) => {
   const [inputValue, setInputValue] = useState(item.quantity);
@@ -54,7 +57,14 @@ const CartItem = ({ item, onUpdateQuantity, onRemove }) => {
     <div className="p-3 flex items-center gap-2 hover:bg-gray-50/50 dark:hover:bg-slate-800/50 transition-colors">
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-gray-800 dark:text-slate-100 truncate">{item.name}</p>
-        <p className="text-xs text-gray-500 dark:text-slate-400">{formatCurrency(item.selling_price)}</p>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <p className="text-xs text-gray-500 dark:text-slate-400">{formatCurrency(item.selling_price)}</p>
+          {isDeductEnabled(item.deduct_recipe_on_sale) && item.quantity > item.stock_quantity && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 border border-amber-300/40 text-amber-700 dark:text-amber-300 font-bold">
+              คลัง {Math.max(0, item.stock_quantity)} + ตัดสูตร {item.quantity - Math.max(0, item.stock_quantity)}
+            </span>
+          )}
+        </div>
       </div>
       <div className="flex items-center gap-1">
         <button onClick={() => onUpdateQuantity(item.product_id, item.quantity - 1)}
@@ -115,12 +125,17 @@ export default function POSPage() {
   };
 
   const openCheckoutModal = () => {
+    if (!canMaintain) {
+      toast.error("คุณไม่มีสิทธิ์ทำรายการขาย (โหมดดูเท่านั้น)");
+      return;
+    }
     cancelQuickSaleTimer();
     loadDebtors();
     setPaymentModal(true);
   };
 
   const startOrResetQuickSaleTimer = () => {
+    if (!canMaintain) return;
     cancelQuickSaleTimer();
     const durationMs = 2000;
     targetTimeRef.current = Date.now() + durationMs;
@@ -139,6 +154,10 @@ export default function POSPage() {
   };
 
   const toggleQuickSale = () => {
+    if (!canMaintain) {
+      toast.error("คุณไม่มีสิทธิ์ทำรายการขาย (โหมดดูเท่านั้น)");
+      return;
+    }
     setQuickSaleMode(prev => {
       const nextVal = !prev;
       localStorage.setItem('pos_quick_sale_mode', String(nextVal));
@@ -157,21 +176,52 @@ export default function POSPage() {
   }, []);
 
   const { cart, subTotal, tax, total, addItem: addItemRaw, removeItem, updateQuantity, clearCart } = useCart();
-  const { activeStore } = useAuth();
+  const { user, activeStore } = useAuth();
+  const canMaintain = canMaintainModule(user, 'pos');
+
+  // Recipe Deduction opt-in: D1 may return 0/1 numbers, legacy/edge cases
+  // may surface boolean or string — treat all truthy "on" forms as enabled.
+  const isDeductEnabled = (v) => v === 1 || v === true || v === '1';
 
   // Custom addItem to trigger bubble notification and Quick Sale countdown
   const addItem = (item) => {
+    if (item.pending_adjust_id || item.recipe_pending_adjust_id) {
+      toast.error(`สินค้า "${item.name}" มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE ไม่สามารถขายได้ขณะนี้`, { 
+        id: `locked-${item.id}`,
+        duration: 3000,
+        icon: '🔒'
+      });
+      return;
+    }
+
     const existingInCart = cart.items.find(i => i.product_id === item.id);
     const currentQty = existingInCart ? existingInCart.quantity : 0;
 
+    // Recipe Deduction opt-in products can sell finished stock + items producible from ingredients.
+    // Cap strictly at maxSellable (finished stock + recipe_produce_qty).
+    const deductBypass = isDeductEnabled(item.deduct_recipe_on_sale);
+    const maxSellable = deductBypass
+      ? (item.max_available_qty !== undefined ? item.max_available_qty : ((Math.max(0, item.stock_quantity || 0)) + (item.recipe_produce_qty || 0)))
+      : (item.stock_quantity || 0);
+
     // Check stock before adding
-    if (currentQty + 1 > item.stock_quantity) {
-      toast.error(`สินค้า "${item.name}" มีในคลังเพียง ${item.stock_quantity} ชิ้น`, { 
-        id: 'out-of-stock',
-        duration: 2000,
-        position: 'top-center',
-        icon: '⚠️'
-      });
+    if (currentQty + 1 > maxSellable) {
+      if (deductBypass) {
+        const bottleMsg = item.limiting_ingredient?.name ? ` เนื่องจากวัตถุดิบ "${item.limiting_ingredient.name}" มีในคลังเพียง ${item.limiting_ingredient.stock} ${item.limiting_ingredient.unit || ''}` : '';
+        toast.error(`สินค้า "${item.name}" ขายได้สูงสุด ${maxSellable} ชิ้น (คลัง ${Math.max(0, item.stock_quantity || 0)} + ตัดสูตรได้อีก ${item.recipe_produce_qty || 0} ชิ้น${bottleMsg})`, { 
+          id: `out-of-stock-${item.id}`,
+          duration: 3500,
+          position: 'top-center',
+          icon: '⚠️'
+        });
+      } else {
+        toast.error(`สินค้า "${item.name}" มีในคลังเพียง ${item.stock_quantity} ชิ้น`, { 
+          id: 'out-of-stock',
+          duration: 2000,
+          position: 'top-center',
+          icon: '⚠️'
+        });
+      }
       return;
     }
 
@@ -205,30 +255,40 @@ export default function POSPage() {
     }
 
     const product = products.find(p => p.id === productId);
-    if (product && newQty > product.stock_quantity) {
-      toast.error(`สินค้า "${product.name}" มีในคลังเพียง ${product.stock_quantity} ชิ้น (ปรับให้เท่ากับจำนวนสูงสุดแล้ว)`, { 
-        id: 'out-of-stock-update',
-        duration: 2000,
-        position: 'top-center'
-      });
-      // Auto-cap to max stock
-      updateQuantity(productId, product.stock_quantity);
+    if (!product) {
+      updateQuantity(productId, newQty);
+      return;
+    }
+    const deductBypass = isDeductEnabled(product.deduct_recipe_on_sale);
+    const maxSellable = deductBypass
+      ? (product.max_available_qty !== undefined ? product.max_available_qty : ((Math.max(0, product.stock_quantity || 0)) + (product.recipe_produce_qty || 0)))
+      : (product.stock_quantity || 0);
+
+    if (newQty > maxSellable) {
+      if (deductBypass) {
+        const bottleMsg = product.limiting_ingredient?.name ? ` ("${product.limiting_ingredient.name}" มีในคลัง ${product.limiting_ingredient.stock} ${product.limiting_ingredient.unit || ''})` : '';
+        toast.error(`สินค้า "${product.name}" ขายได้สูงสุด ${maxSellable} ชิ้น${bottleMsg} (ปรับให้เท่ากับจำนวนสูงสุดแล้ว)`, { 
+          id: `out-of-stock-update-${productId}`,
+          duration: 3000,
+          position: 'top-center',
+          icon: '⚠️'
+        });
+      } else {
+        toast.error(`สินค้า "${product.name}" มีในคลังเพียง ${product.stock_quantity} ชิ้น (ปรับให้เท่ากับจำนวนสูงสุดแล้ว)`, { 
+          id: 'out-of-stock-update',
+          duration: 2000,
+          position: 'top-center'
+        });
+      }
+      // Auto-cap to max sellable
+      updateQuantity(productId, Math.max(0, maxSellable));
       return;
     }
     updateQuantity(productId, newQty);
   };
 
 
-  useEffect(() => { loadProducts(); loadCategories(); }, []);
-
-  useEffect(() => {
-    if (paymentModal) {
-      setCashReceived("");
-      setPaymentMethod("cash");
-    }
-  }, [paymentModal]);
-
-  const loadProducts = async () => {
+  const loadProducts = useCallback(async () => {
     try {
       const res = await api.get("/products", { params: { limit: 200, raw_material: "false" } });
       const sellable = (res.data.data || []).filter(p => !p.is_raw_material);
@@ -238,7 +298,35 @@ export default function POSPage() {
       const cached = await getCachedProducts();
       setProducts((cached || []).filter(p => !p.is_raw_material));
     }
-  };
+  }, []);
+
+  useEffect(() => { 
+    loadProducts(); 
+    loadCategories(); 
+  }, [loadProducts]);
+
+  // Reactive background polling when any product or ingredient has pending adjust approval
+  const hasPendingAdjust = useMemo(() => 
+    products.some(p => p.pending_adjust_id || p.recipe_pending_adjust_id),
+    [products]
+  );
+  const prevPendingCountRef = useRef(0);
+
+  useEffect(() => {
+    const currentPendingCount = products.filter(p => p.pending_adjust_id || p.recipe_pending_adjust_id).length;
+    if (prevPendingCountRef.current > 0 && currentPendingCount < prevPendingCountRef.current) {
+      toast.success("✨ สินค้าได้รับการอนุมัติปรับสต็อกแล้ว พร้อมจำหน่ายทันที", { duration: 3500 });
+    }
+    prevPendingCountRef.current = currentPendingCount;
+  }, [products]);
+
+  useEffect(() => {
+    if (!hasPendingAdjust) return;
+    const interval = setInterval(() => {
+      loadProducts();
+    }, 3500);
+    return () => clearInterval(interval);
+  }, [hasPendingAdjust, loadProducts]);
 
   const loadCategories = async () => {
     try {
@@ -249,6 +337,7 @@ export default function POSPage() {
 
   const handleAddCategory = async (e) => {
     e.preventDefault();
+    if (!canMaintain) return toast.error("คุณไม่มีสิทธิ์เพิ่มหมวดหมู่ (โหมดดูเท่านั้น)");
     if (!catName.trim()) return;
     setCatSaving(true);
     try {
@@ -289,8 +378,6 @@ export default function POSPage() {
   const [ppConfirmModal, setPpConfirmModal] = useState(false);
   const invoiceRef = useRef(null);
 
-  const [printerConnected, setPrinterConnected] = useState(false);
-  const [printerTransport, setPrinterTransport] = useState(null);
   const [lastOrderData, setLastOrderData] = useState(null);
   const isAndroidPOS = hardwareScanner.isAvailable();
 
@@ -308,28 +395,6 @@ export default function POSPage() {
     hardwareScanner.subscribe(onScan);
     return () => hardwareScanner.unsubscribe(onScan);
   }, [isAndroidPOS, products]);
-
-  const handleConnectUsb = async () => {
-    try {
-      await connectUsb();
-      setPrinterConnected(true);
-      setPrinterTransport('usb');
-      toast.success('เชื่อมต่อเครื่องพิมพ์ USB สำเร็จ');
-    } catch (err) {
-      toast.error(err.message || 'เชื่อมต่อ USB ล้มเหลว');
-    }
-  };
-
-  const handleConnectBluetooth = async () => {
-    try {
-      await connectBluetooth();
-      setPrinterConnected(true);
-      setPrinterTransport('bluetooth');
-      toast.success('เชื่อมต่อเครื่องพิมพ์ Bluetooth สำเร็จ');
-    } catch (err) {
-      toast.error(err.message || 'เชื่อมต่อ Bluetooth ล้มเหลว');
-    }
-  };
 
   const handlePrintReceipt = async (orderData) => {
     const source = orderData || lastOrderData;
@@ -373,7 +438,8 @@ export default function POSPage() {
 
     const t = toast.loading("กำลังบันทึกรายการและสร้างใบแจ้งยอด...");
     try {
-      await api.post("/orders", orderData);
+      const res = await api.post("/orders", orderData);
+      showStockWarnings(res.data?.stock_warnings);
       
       // 2. Generate JPEG
       if (!invoiceRef.current) throw new Error("Invoice template not found");
@@ -421,6 +487,7 @@ export default function POSPage() {
 
   const handleAddDebtor = async (e) => {
     e.preventDefault();
+    if (!canMaintain) return toast.error("คุณไม่มีสิทธิ์เพิ่มลูกหนี้ (โหมดดูเท่านั้น)");
     setSavingDebtor(true);
     try {
       const res = await api.post("/debtors", { name: newDebtorName, phone: newDebtorPhone });
@@ -434,8 +501,16 @@ export default function POSPage() {
     finally { setSavingDebtor(false); }
   };
 
+  // Defensive: backend hard-blocks raw shortages (400), so warnings should
+  // normally be empty on success. If any arrive, surface them prominently.
+  const showStockWarnings = (warnings) => {
+    if (!warnings || warnings.length === 0) return;
+    const msg = warnings.map((w) => w.message || w.name).join('\n');
+    toast(`⚠️ สต็อกวัตถุดิบไม่พอ:\n${msg}`, { duration: 7000 });
+  };
+
   const handlePayment = async () => {
-    const isOutstanding = paymentMethod === "outstanding";
+    if (!canMaintain) return toast.error("คุณไม่มีสิทธิ์ทำรายการขาย (โหมดดูเท่านั้น)");    const isOutstanding = paymentMethod === "outstanding";
     if (isOutstanding && !debtorId) { toast.error("กรุณาเลือกลูกหนี้"); return; }
     const orderData = {
       items: cart.items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.selling_price, discount: i.discount || 0, name: i.name })),
@@ -452,8 +527,9 @@ export default function POSPage() {
     };
     try {
       if (navigator.onLine) {
-        await api.post("/orders", orderData);
+        const res = await api.post("/orders", orderData);
         toast.success(isOutstanding ? "บันทึกค้างชำระสำเร็จ!" : "ชำระเงินสำเร็จ!");
+        showStockWarnings(res.data?.stock_warnings);
         loadProducts();
       } else {
         await savePendingOrder(orderData);
@@ -480,19 +556,41 @@ export default function POSPage() {
   const ProductGrid = ({ cols }) => (
     <div className={`grid gap-3 ${cols}`}>
       {filteredProducts.map((product) => {
-        const isOutOfStock = product.stock_quantity <= 0;
+        const deductOnSale = isDeductEnabled(product.deduct_recipe_on_sale);
+        const maxSellable = deductOnSale
+          ? (product.max_available_qty !== undefined ? product.max_available_qty : ((Math.max(0, product.stock_quantity || 0)) + (product.recipe_produce_qty || 0)))
+          : (product.stock_quantity || 0);
+        const isOutOfStock = maxSellable <= 0;
+        const isPendingAdjust = Boolean(product.pending_adjust_id || product.recipe_pending_adjust_id);
+        const isDisabled = isOutOfStock || isPendingAdjust;
         return (
           <button
             key={product.id}
             onClick={() => { addItem(product); }}
-            disabled={isOutOfStock}
+            disabled={isDisabled}
             className={`relative bg-white rounded-xl shadow-sm border border-gray-100 p-3 flex flex-col items-center transition-all ${
-              isOutOfStock 
+              isDisabled 
                 ? 'opacity-60 grayscale cursor-not-allowed' 
                 : 'active:scale-95 hover:shadow-md'
             }`}
           >
-            {isOutOfStock && (
+            {isPendingAdjust ? (
+              <div className="absolute top-2 right-2 z-10">
+                <span className="bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-sm animate-pulse" title="รออนุมัติปรับสต็อกใน LINE">
+                  🔒 รออนุมัติ
+                </span>
+              </div>
+            ) : deductOnSale ? (
+              <div className="absolute top-2 right-2 z-10">
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-sm ${
+                  isOutOfStock 
+                    ? 'bg-rose-600 text-white' 
+                    : 'bg-amber-500 text-white'
+                }`} title={isOutOfStock ? 'วัตถุดิบตามสูตรไม่พอผลิต' : `ตัดสูตรอัตโนมัติ — สำเร็จรูป ${product.stock_quantity || 0} + ตัดสูตรได้อีก ${product.recipe_produce_qty || 0} ชิ้น`}>
+                  {isOutOfStock ? 'วัตถุดิบหมด' : '🧾 ตัดสูตร'}
+                </span>
+              </div>
+            ) : isOutOfStock && (
               <div className="absolute top-2 right-2 z-10">
                 <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-sm">
                   หมด
@@ -507,13 +605,24 @@ export default function POSPage() {
             <span className="text-xs font-medium text-gray-800 text-center line-clamp-2 leading-tight mb-1">
               {product.name}
             </span>
-            <div className="flex flex-col items-center">
+            <div className="flex flex-col items-center text-center">
               <span className="text-sm font-bold text-blue-600">
                 {formatCurrency(product.selling_price)}
               </span>
-              <span className={`text-[10px] font-medium mt-0.5 ${isOutOfStock ? 'text-red-500' : 'text-gray-400'}`}>
-                คลัง: {product.stock_quantity}
-              </span>
+              {deductOnSale ? (
+                <div className="flex flex-col items-center mt-0.5 leading-tight">
+                  <span className={`text-[10px] font-bold ${isOutOfStock ? 'text-rose-500' : 'text-amber-600 dark:text-amber-400'}`}>
+                    คลัง: {product.stock_quantity} (+{product.recipe_produce_qty ?? 0} ตัดสูตร)
+                  </span>
+                  <span className="text-[9px] text-gray-500 dark:text-slate-400 font-medium">
+                    (ขายได้รวม {maxSellable} ชิ้น)
+                  </span>
+                </div>
+              ) : (
+                <span className={`text-[10px] font-medium mt-0.5 ${isOutOfStock ? 'text-red-500' : 'text-gray-400'}`}>
+                  คลัง: {product.stock_quantity}
+                </span>
+              )}
             </div>
           </button>
         );
@@ -536,10 +645,12 @@ export default function POSPage() {
           {cat.name}
         </button>
       ))}
-      <button onClick={() => { setCatName(""); setCatModal(true); }}
-        className="whitespace-nowrap flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md ml-1"
-        style={{ backgroundImage: "linear-gradient(to left,#3300FC,#95008A,#EB0000)" }}
-        title="เพิ่มหมวดหมู่">+</button>
+      {canMaintain && (
+        <button onClick={() => { setCatName(""); setCatModal(true); }}
+          className="whitespace-nowrap flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md ml-1"
+          style={{ backgroundImage: "linear-gradient(to left,#3300FC,#95008A,#EB0000)" }}
+          title="เพิ่มหมวดหมู่">+</button>
+      )}
     </div>
   );
 
@@ -566,7 +677,7 @@ export default function POSPage() {
   );
 
   const CartSummary = () => (
-    <div className="border-t border-primary-100/60 dark:border-slate-700 p-4 space-y-2 bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm">
+    <div className="border-t border-primary-100/60 dark:border-slate-700 p-4 space-y-2 bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm flex-shrink-0">
       <div className="flex justify-between text-sm text-gray-500 dark:text-slate-400"><span>ยอดรวม</span><span className="font-medium text-gray-700 dark:text-slate-200">{formatCurrency(subTotal)}</span></div>
       {cart.discount > 0 && <div className="flex justify-between text-sm text-danger-600"><span>ส่วนลด</span><span>-{formatCurrency(cart.discount)}</span></div>}
       <div className="flex justify-between text-sm text-gray-500 dark:text-slate-400"><span>VAT {activeStore?.vat_rate ?? 7}%</span><span className="font-medium text-gray-700 dark:text-slate-200">{formatCurrency(tax)}</span></div>
@@ -574,10 +685,16 @@ export default function POSPage() {
         <span className="text-gray-700 dark:text-slate-100">รวมทั้งสิ้น</span>
         <span className="text-primary-600 dark:text-purple-400">{formatCurrency(total)}</span>
       </div>
-      <button onClick={() => setPaymentModal(true)} disabled={cart.items.length === 0}
-        className="btn-success w-full text-lg rounded-2xl disabled:opacity-40 disabled:cursor-not-allowed mt-1"
-        onMouseEnter={loadDebtors}>
-        💳 ชำระเงิน {cart.items.length > 0 ? formatCurrency(total) : ''}
+      <button 
+        onClick={() => setPaymentModal(true)} 
+        disabled={!canMaintain || cart.items.length === 0}
+        className="btn-success w-full text-base sm:text-lg rounded-2xl disabled:opacity-40 disabled:cursor-not-allowed mt-1"
+        onMouseEnter={loadDebtors}
+        title={!canMaintain ? "โหมดดูเท่านั้น (ไม่มีสิทธิ์ทำรายการขาย)" : ""}
+      >
+        {!canMaintain 
+          ? "👁️ ดูเท่านั้น (ไม่มีสิทธิ์ทำรายการขาย)" 
+          : `💳 ชำระเงิน ${cart.items.length > 0 ? formatCurrency(total) : ''}`}
       </button>
       <div className="flex gap-2">
         <button onClick={() => { 
@@ -595,7 +712,7 @@ export default function POSPage() {
   );
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-56px)] page-bg-gradient">
+    <div className="flex flex-col flex-1 h-full min-h-0 page-bg-gradient overflow-hidden">
 
       {/* Quick Sale Countdown HUD */}
       {quickSaleCountdown !== null && (
@@ -634,9 +751,9 @@ export default function POSPage() {
       )}
 
       {/* DESKTOP (md+) */}
-      <div className="hidden md:flex flex-1 min-h-0">
+      <div className="hidden md:flex flex-1 h-full min-h-0">
         {/* Left - Products */}
-        <div className="w-[65%] flex flex-col border-r border-primary-100/60">
+        <div className="w-[65%] flex flex-col h-full min-h-0 border-r border-primary-100/60">
           <div className="p-3 border-b border-primary-100/60 flex-shrink-0 bg-white/50 backdrop-blur-sm">
             <div className="flex gap-2 items-center">
               <input id="search-input" type="text" placeholder="🔍 ค้นหาสินค้า / สแกนบาร์โค้ด (F2)"
@@ -648,37 +765,43 @@ export default function POSPage() {
                 <ScanIcon size={22} color="white" strokeWidth={2} />
               </button>
               {/* Quick Sale Toggle */}
-              <button
-                type="button"
-                onClick={toggleQuickSale}
-                className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border shadow-xs cursor-pointer ${
-                  quickSaleMode 
-                    ? 'bg-amber-500 text-white border-amber-600 shadow-amber-200' 
-                    : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700'
-                }`}
-                title={quickSaleMode ? "เปิดโหมดขายด่วนอยู่ (คลิกเพื่อปิด)" : "คลิกเพื่อเปิดโหมดขายด่วน"}
-              >
-                <span className="text-sm">⚡</span>
-                <span className="whitespace-nowrap">ขายด่วน</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${quickSaleMode ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-slate-700 text-gray-500'}`}>
-                  {quickSaleMode ? 'ON' : 'OFF'}
+              {canMaintain ? (
+                <button
+                  type="button"
+                  onClick={toggleQuickSale}
+                  className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border shadow-xs cursor-pointer ${
+                    quickSaleMode 
+                      ? 'bg-amber-500 text-white border-amber-600 shadow-amber-200' 
+                      : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700'
+                  }`}
+                  title={quickSaleMode ? "เปิดโหมดขายด่วนอยู่ (คลิกเพื่อปิด)" : "คลิกเพื่อเปิดโหมดขายด่วน"}
+                >
+                  <span className="text-sm">⚡</span>
+                  <span className="whitespace-nowrap">ขายด่วน</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${quickSaleMode ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-slate-700 text-gray-500'}`}>
+                    {quickSaleMode ? 'ON' : 'OFF'}
+                  </span>
+                </button>
+              ) : (
+                <span className="px-2.5 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 font-bold text-xs whitespace-nowrap">
+                  👁️ ดูเท่านั้น
                 </span>
-              </button>
+              )}
             </div>
           </div>
           <CategoryBar />
-          <div className="flex-1 overflow-y-auto p-3">
+          <div className="flex-1 overflow-y-auto p-3 min-h-0">
             <ProductGrid cols="grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" />
           </div>
         </div>
         {/* Right - Cart */}
-        <div className="w-[35%] flex flex-col bg-white/60 dark:bg-slate-900/60 border-l border-purple-100/40 dark:border-slate-800 backdrop-blur-sm">
+        <div className="w-[35%] flex flex-col h-full min-h-0 bg-white/60 dark:bg-slate-900/60 border-l border-purple-100/40 dark:border-slate-800 backdrop-blur-sm">
           <div className="p-4 border-b border-primary-100/60 dark:border-slate-800 flex-shrink-0">
             <h2 className="font-bold text-gray-700 dark:text-slate-100 flex items-center gap-2">
               <span className="text-lg">🧾</span> ตะกร้าสินค้า
             </h2>
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto min-h-0">
             <CartItems />
           </div>
           <CartSummary />
@@ -699,22 +822,28 @@ export default function POSPage() {
                 <ScanIcon size={22} color="white" strokeWidth={2} />
               </button>
               {/* Quick Sale Toggle */}
-              <button
-                type="button"
-                onClick={toggleQuickSale}
-                className={`flex items-center gap-1.5 px-2.5 py-2.5 rounded-xl text-xs font-bold transition-all border shadow-xs cursor-pointer ${
-                  quickSaleMode 
-                    ? 'bg-amber-500 text-white border-amber-600 shadow-amber-200' 
-                    : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700'
-                }`}
-                title={quickSaleMode ? "เปิดโหมดขายด่วนอยู่ (คลิกเพื่อปิด)" : "คลิกเพื่อเปิดโหมดขายด่วน"}
-              >
-                <span className="text-sm">⚡</span>
-                <span className="hidden xs:inline whitespace-nowrap">ขายด่วน</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${quickSaleMode ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-slate-700 text-gray-500'}`}>
-                  {quickSaleMode ? 'ON' : 'OFF'}
+              {canMaintain ? (
+                <button
+                  type="button"
+                  onClick={toggleQuickSale}
+                  className={`flex items-center gap-1.5 px-2.5 py-2.5 rounded-xl text-xs font-bold transition-all border shadow-xs cursor-pointer ${
+                    quickSaleMode 
+                      ? 'bg-amber-500 text-white border-amber-600 shadow-amber-200' 
+                      : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700'
+                  }`}
+                  title={quickSaleMode ? "เปิดโหมดขายด่วนอยู่ (คลิกเพื่อปิด)" : "คลิกเพื่อเปิดโหมดขายด่วน"}
+                >
+                  <span className="text-sm">⚡</span>
+                  <span className="hidden xs:inline whitespace-nowrap">ขายด่วน</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${quickSaleMode ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-slate-700 text-gray-500'}`}>
+                    {quickSaleMode ? 'ON' : 'OFF'}
+                  </span>
+                </button>
+              ) : (
+                <span className="px-2.5 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 font-bold text-xs whitespace-nowrap">
+                  👁️ ดูเท่านั้น
                 </span>
-              </button>
+              )}
             </div>
           </div>
           <CategoryBar />
@@ -769,7 +898,7 @@ export default function POSPage() {
           </div>
 
           {/* Bottom Bar: Total & Checkout Button */}
-          <div className="p-3 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-white dark:bg-slate-900">
+          <div className="p-3 pb-[max(0.75rem,calc(0.75rem+env(safe-area-inset-bottom,0px)))] border-t border-gray-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-white dark:bg-slate-900">
             <div className="flex flex-col min-w-0">
               <span className="text-[10px] text-gray-400 dark:text-slate-400 font-medium">
                 รวมทั้งสิ้น {cart.discount > 0 ? `(ลด ${formatCurrency(cart.discount)})` : ''}
@@ -781,11 +910,18 @@ export default function POSPage() {
             <button
               type="button"
               onClick={openCheckoutModal}
-              disabled={cart.items.length === 0}
-              className="btn-success flex-1 max-w-[200px] py-3 text-base font-black rounded-xl shadow-md disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 cursor-pointer"
+              disabled={!canMaintain || cart.items.length === 0}
+              className="btn-success flex-1 max-w-[200px] py-3 text-sm sm:text-base font-black rounded-xl shadow-md disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 cursor-pointer"
+              title={!canMaintain ? "โหมดดูเท่านั้น (ไม่มีสิทธิ์ทำรายการขาย)" : ""}
             >
-              <span>💳 ชำระเงิน</span>
-              {cart.items.length > 0 && <span className="text-xs opacity-90">({formatCurrency(total)})</span>}
+              {!canMaintain ? (
+                <span>👁️ ดูเท่านั้น</span>
+              ) : (
+                <>
+                  <span>💳 ชำระเงิน</span>
+                  {cart.items.length > 0 && <span className="text-xs opacity-90">({formatCurrency(total)})</span>}
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -794,7 +930,7 @@ export default function POSPage() {
       {/* Payment Modal */}
       {paymentModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-          <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-lg p-6 border border-primary-100">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-lg p-6 pb-[max(1.5rem,calc(1.5rem+env(safe-area-inset-bottom,0px)))] border border-primary-100">
             <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto mb-5 sm:hidden" />
             <h2 className="text-xl font-bold text-gray-800 mb-4">💳 ชำระเงิน</h2>
             <div className="text-center mb-5 rounded-2xl py-4 px-6" style={{ background: '#EB0000', backgroundImage: 'linear-gradient(to left, #3300FC, #95008A, #EB0000)' }}>
@@ -828,10 +964,12 @@ export default function POSPage() {
                     <option value="">— เลือกลูกหนี้ —</option>
                     {debtors.map(d => <option key={d.id} value={d.id}>{d.name}{d.phone ? ` (${d.phone})` : ''}</option>)}
                   </select>
-                  <button type="button" onClick={() => setDebtorModal(true)}
-                    className="flex-shrink-0 w-10 h-10 rounded-xl text-white text-xl font-bold shadow-md hover:opacity-90"
-                    style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}
-                    title="เพิ่มลูกหนี้ใหม่">+</button>
+                  {canMaintain && (
+                    <button type="button" onClick={() => setDebtorModal(true)}
+                      className="flex-shrink-0 w-10 h-10 rounded-xl text-white text-xl font-bold shadow-md hover:opacity-90"
+                      style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}
+                      title="เพิ่มลูกหนี้ใหม่">+</button>
+                  )}
                 </div>
                 {!debtorId && <p className="text-xs text-red-500">* กรุณาเลือกลูกหนี้</p>}
                 <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
@@ -900,28 +1038,6 @@ export default function POSPage() {
                   </button>
                 </div>
               </div>
-            )}
-            {/* Printer connect row — shown only when no native bridge detected */}
-            {!isPrinterAvailable() && (navigator.usb || navigator.bluetooth) && (
-              <div className="flex gap-2 mb-4">
-                {navigator.usb && (
-                  <button onClick={handleConnectUsb}
-                    className="flex-1 py-2 rounded-xl text-xs font-semibold border border-gray-200 bg-gray-50 hover:bg-gray-100 flex items-center justify-center gap-1 transition-all">
-                    🖨️ เชื่อม USB
-                  </button>
-                )}
-                {navigator.bluetooth && (
-                  <button onClick={handleConnectBluetooth}
-                    className="flex-1 py-2 rounded-xl text-xs font-semibold border border-gray-200 bg-gray-50 hover:bg-gray-100 flex items-center justify-center gap-1 transition-all">
-                    📡 เชื่อม Bluetooth
-                  </button>
-                )}
-              </div>
-            )}
-            {printerConnected && (
-              <p className="text-xs text-green-600 font-medium text-center mb-3">
-                ✅ เครื่องพิมพ์พร้อมใช้งาน ({printerTransport})
-              </p>
             )}
 
             <div className="flex gap-3 mt-4">

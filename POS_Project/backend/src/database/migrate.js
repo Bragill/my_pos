@@ -26,6 +26,10 @@ async function migrate() {
   await db.run(`CREATE TABLE IF NOT EXISTS work_orders (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, wo_number TEXT NOT NULL UNIQUE, product_id TEXT NOT NULL, product_name TEXT NOT NULL, batch_count REAL NOT NULL DEFAULT 1, produced_yield REAL NOT NULL DEFAULT 0, yield_unit TEXT NOT NULL, total_cost REAL DEFAULT 0, user_id TEXT NOT NULL, user_name TEXT, remark TEXT, created_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
   await db.run(`CREATE TABLE IF NOT EXISTS work_order_items (id TEXT PRIMARY KEY, wo_id TEXT NOT NULL, ingredient_id TEXT NOT NULL, ingredient_name TEXT NOT NULL, quantity REAL NOT NULL, unit TEXT NOT NULL, cost REAL DEFAULT 0)`);
   
+  await db.run(`CREATE TABLE IF NOT EXISTS line_settings (id TEXT PRIMARY KEY, store_id TEXT NOT NULL UNIQUE, channel_access_token TEXT, channel_secret TEXT, target_group_id TEXT, enable_daily_report INTEGER DEFAULT 1, daily_report_time TEXT DEFAULT '22:00', last_daily_report_sent_date TEXT, enable_approval_notifications INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now', '+7 hours')), updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
+  await db.run(`CREATE TABLE IF NOT EXISTS approval_requests (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, document_type TEXT NOT NULL, document_id TEXT NOT NULL, amount REAL DEFAULT 0, reason TEXT, requester_id TEXT, requester_name TEXT, status TEXT DEFAULT 'PENDING', approver_name TEXT, approver_line_user_id TEXT, responded_at TEXT, line_message_id TEXT, created_at TEXT DEFAULT (datetime('now', '+7 hours')), payload TEXT)`);
+  await db.run(`CREATE TABLE IF NOT EXISTS device_security (id TEXT PRIMARY KEY, mac_address TEXT NOT NULL UNIQUE, ip_address TEXT, location TEXT, user_agent TEXT, device_name TEXT, last_user_name TEXT, failed_attempts INTEGER DEFAULT 0, status TEXT DEFAULT 'NORMAL', lock_until TEXT, locked_reason TEXT, is_bot INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now', '+7 hours')), updated_at TEXT DEFAULT (datetime('now', '+7 hours')))`);
+
   try { await db.run("ALTER TABLE orders ADD COLUMN debtor_id TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE stores ADD COLUMN promptpay_number TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE stores ADD COLUMN promptpay_name TEXT"); } catch(e) {}
@@ -42,6 +46,10 @@ async function migrate() {
   try { await db.run("ALTER TABLE ingredient_stock_transactions ADD COLUMN gi_number TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE ingredient_stock_transactions ADD COLUMN po_number TEXT"); } catch(e) {}
   try { await db.run("ALTER TABLE roles ADD COLUMN description TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE order_items ADD COLUMN recipe_deducted TEXT"); } catch(e) {}
+  try { await db.run("ALTER TABLE products ADD COLUMN deduct_recipe_on_sale INTEGER DEFAULT 0"); } catch(e) {}
+  try { await db.run("ALTER TABLE products ADD COLUMN yield_unit TEXT"); } catch(e) {}
+  try { await db.run("UPDATE products SET deduct_recipe_on_sale = 1 WHERE (deduct_recipe_on_sale IS NULL OR deduct_recipe_on_sale = 0) AND EXISTS (SELECT 1 FROM recipes r WHERE r.product_id = products.id)"); } catch(e) {}
   
   console.log("Migration completed!");
 }

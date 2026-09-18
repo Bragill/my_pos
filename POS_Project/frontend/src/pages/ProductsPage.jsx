@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { formatCurrency, formatQty } from '../utils/format';
-import api from '../services/api';
+import api, { recipesAPI } from '../services/api';
 import toast from 'react-hot-toast';
 import Pagination from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import BarcodeScanner from '../components/BarcodeScanner';
 import ScanIcon from '../components/ScanIcon';
+import { useAuth } from '../contexts/AuthContext';
+import { canMaintainModule } from '../utils/permissions';
 
 const GRAD = 'linear-gradient(to left,#3300FC,#95008A,#EB0000)';
 
@@ -154,13 +156,19 @@ function PackCalculator({ onApply, onUnlock }) {
 }
 
 export default function ProductsPage() {
+  const { user } = useAuth();
+  const canMaintain = canMaintainModule(user, 'products');
+
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [recipeSummaryMap, setRecipeSummaryMap] = useState({});
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [search, setSearch] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [packLocked, setPackLocked] = useState(false);
+  const [productType, setProductType] = useState('standard'); // 'standard' | 'finished_goods' | 'raw_material'
+  const [selectedLinkedRecipeId, setSelectedLinkedRecipeId] = useState('');
   const [form, setForm] = useState({
     sku: '', barcode: '', name: '', description: '', category_id: '',
     cost_price: '', selling_price: '', image_url: '', is_featured: false, is_raw_material: false, unit: 'ชิ้น', net_weight: 1, reorder_level: 5,
@@ -269,10 +277,72 @@ export default function ProductsPage() {
     }
   };
 
+  const getProductRecipeInfo = (product) => {
+    if (!product) return null;
+    const rec = recipeSummaryMap[product.id];
+    if (rec && (rec.ingredient_count > 0 || (rec.unit_cost !== undefined && rec.unit_cost > 0))) {
+      return rec;
+    }
+    if (product.recipe_name || (product.sku && product.sku.startsWith('REC'))) {
+      if (rec) return rec;
+      return {
+        unit_cost: product.cost_price,
+        ingredient_count: 1,
+        recipe_name: product.recipe_name
+      };
+    }
+    return null;
+  };
+
   const loadProducts = async () => {
     try {
-      const res = await api.get('/products', { params: { limit: 200 } });
-      setProducts(res.data.data);
+      const [resProd, resRec] = await Promise.allSettled([
+        api.get('/products', { params: { limit: 200 } }),
+        recipesAPI.getSummary()
+      ]);
+
+      const map = {};
+      if (resRec.status === 'fulfilled' && resRec.value?.data?.data && Array.isArray(resRec.value.data.data)) {
+        for (const item of resRec.value.data.data) {
+          map[item.product_id] = item;
+        }
+      }
+
+      if (resProd.status === 'fulfilled' && resProd.value?.data?.data) {
+        const prodList = resProd.value.data.data;
+        const missing = prodList.filter(p =>
+          !map[p.id] && (
+            (p.sku && p.sku.startsWith('REC')) ||
+            (p.recipe_name && p.recipe_name.trim() !== '') ||
+            (parseFloat(p.recipe_yield) > 1)
+          )
+        );
+
+        if (missing.length > 0) {
+          await Promise.allSettled(
+            missing.map(async (p) => {
+              try {
+                const rRes = await recipesAPI.getByProduct(p.id);
+                if (rRes.data?.success && rRes.data.data) {
+                  const d = rRes.data.data;
+                  map[p.id] = {
+                    product_id: p.id,
+                    calculated_cost: d.calculated_cost || 0,
+                    unit_cost: d.unit_cost !== undefined ? d.unit_cost : (p.cost_price || 0),
+                    ingredient_count: (d.recipe || []).length,
+                    recipe_name: p.recipe_name,
+                    portion_count: p.portion_count,
+                    portion_unit: p.portion_unit
+                  };
+                }
+              } catch (_) {}
+            })
+          );
+        }
+
+        setRecipeSummaryMap(map);
+        setProducts(prodList);
+      }
     } catch (err) {
       toast.error('โหลดสินค้าไม่สำเร็จ');
     }
@@ -285,12 +355,77 @@ export default function ProductsPage() {
     } catch {}
   };
 
+  const isExistingRawMaterial = Boolean(
+    editingProduct && (
+      editingProduct.is_raw_material === 1 ||
+      editingProduct.is_raw_material === true ||
+      (editingProduct.category_name && editingProduct.category_name.includes('วัตถุดิบ'))
+    )
+  );
+
+  const handleSelectProductType = (type) => {
+    if (isExistingRawMaterial && type !== 'raw_material') {
+      toast.error('สินค้าประเภทวัตถุดิบถูกล็อก ไม่สามารถเปลี่ยนเป็นสินค้าขาย POS ได้');
+      return;
+    }
+    setProductType(type);
+    if (type === 'raw_material') {
+      const rawCat = categories.find(c => c.name === 'วัตถุดิบ' || c.is_raw_material);
+      setForm(f => ({
+        ...f,
+        is_raw_material: true,
+        category_id: rawCat ? rawCat.id : f.category_id,
+        selling_price: '0',
+        unit: (f.unit === 'ชิ้น' || !f.unit) ? 'g' : f.unit
+      }));
+    } else if (type === 'finished_goods') {
+      const currentCat = categories.find(c => c.id === form.category_id);
+      let catId = form.category_id;
+      if (currentCat && (currentCat.name === 'วัตถุดิบ' || currentCat.is_raw_material)) {
+        const nonRaw = categories.find(c => !c.name.includes('วัตถุดิบ') && !c.is_raw_material);
+        if (nonRaw) catId = nonRaw.id;
+      }
+      setForm(f => ({
+        ...f,
+        is_raw_material: false,
+        category_id: catId,
+        cost_price: f.cost_price || '0',
+        selling_price: f.selling_price === '0' ? '' : f.selling_price
+      }));
+    } else {
+      const currentCat = categories.find(c => c.id === form.category_id);
+      let catId = form.category_id;
+      if (currentCat && (currentCat.name === 'วัตถุดิบ' || currentCat.is_raw_material)) {
+        const nonRaw = categories.find(c => !c.name.includes('วัตถุดิบ') && !c.is_raw_material);
+        if (nonRaw) catId = nonRaw.id;
+      }
+      setForm(f => ({
+        ...f,
+        is_raw_material: false,
+        category_id: catId,
+        selling_price: f.selling_price === '0' ? '' : f.selling_price
+      }));
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isExistingRawMaterial && productType !== 'raw_material') {
+      toast.error('สินค้าประเภทวัตถุดิบถูกล็อก ไม่สามารถเปลี่ยนเป็นสินค้าขาย POS ได้');
+      return;
+    }
     try {
       const catObj = categories.find(c => c.id === form.category_id);
       const isRawMatCat = catObj && (catObj.name === 'วัตถุดิบ' || catObj.name.includes('วัตถุดิบ'));
-      const isRawMatFinal = Boolean(form.is_raw_material || isRawMatCat);
+      const isFinishedGood = productType === 'finished_goods';
+      const isRawMatFinal = productType === 'raw_material' || (!isFinishedGood && Boolean(form.is_raw_material || isRawMatCat));
+
+      const recInfo = editingProduct ? getProductRecipeInfo(editingProduct) : null;
+      const effectiveCost = isFinishedGood
+        ? (selectedLinkedRecipeId && recipeSummaryMap[selectedLinkedRecipeId]
+            ? recipeSummaryMap[selectedLinkedRecipeId].unit_cost
+            : (recInfo?.unit_cost ?? (parseFloat(form.cost_price) || 0)))
+        : (parseFloat(form.cost_price) || 0);
 
       const payload = {
         ...form,
@@ -298,15 +433,45 @@ export default function ProductsPage() {
         unit: form.unit || (isRawMatFinal ? 'kg' : 'ชิ้น'),
         net_weight: parseFloat(form.net_weight) || 1,
         is_raw_material: isRawMatFinal ? 1 : 0,
-        selling_price: isRawMatFinal ? 0 : parseFloat(form.selling_price) || 0
+        selling_price: isRawMatFinal ? 0 : parseFloat(form.selling_price) || 0,
+        cost_price: effectiveCost,
+        reorder_level: form.reorder_level !== '' && !Number.isNaN(Number(form.reorder_level)) ? Number(form.reorder_level) : 5
       };
+
+      let savedProduct;
       if (editingProduct) {
-        await api.put(`/products/${editingProduct.id}`, { ...payload, is_active: true });
+        const res = await api.put(`/products/${editingProduct.id}`, { ...payload, is_active: true });
+        savedProduct = res.data?.data;
         toast.success('แก้ไขสินค้าสำเร็จ');
       } else {
-        await api.post('/products', payload);
+        const res = await api.post('/products', payload);
+        savedProduct = res.data?.data;
         toast.success('เพิ่มสินค้าสำเร็จ');
       }
+
+      // If finished good and a template recipe was selected, copy recipe items to the new product
+      if (isFinishedGood && selectedLinkedRecipeId && savedProduct?.id && selectedLinkedRecipeId !== savedProduct.id) {
+        try {
+          const recData = await recipesAPI.getByProduct(selectedLinkedRecipeId);
+          if (recData.data?.success && recData.data.data?.recipe) {
+            const items = recData.data.data.recipe.map(i => ({
+              ingredient_id: i.ingredient_id,
+              quantity: i.quantity,
+              unit: i.unit
+            }));
+            await recipesAPI.saveRecipe(savedProduct.id, {
+              items,
+              recipe_name: `สูตร ${savedProduct.name}`,
+              recipe_yield: recData.data.data.product?.recipe_yield || 1,
+              portion_count: recData.data.data.product?.portion_count || 1,
+              portion_unit: form.unit || 'ชิ้น',
+              shelf_life_days: recData.data.data.product?.shelf_life_days || 3,
+              update_product_cost: true
+            });
+          }
+        } catch (_) {}
+      }
+
       setShowForm(false);
       setEditingProduct(null);
       resetForm();
@@ -327,12 +492,30 @@ export default function ProductsPage() {
     const sku = await generateSku();
     setPackLocked(false);
     setPackTotalPrice('');
+    setProductType('standard');
+    setSelectedLinkedRecipeId('');
     setForm({ sku, barcode: '', name: '', description: '', category_id: '',
       cost_price: '', selling_price: '', image_url: '', is_featured: false, is_raw_material: false, unit: 'ชิ้น', net_weight: 1, reorder_level: 5 });
   };
 
   const editProduct = (product) => {
-    const cost = product.pending_cost_price ?? product.cost_price;
+    if (!canMaintain) {
+      toast.error('คุณมีสิทธิ์ดูข้อมูลเท่านั้น ไม่สามารถแก้ไขสินค้าได้');
+      return;
+    }
+    const recInfo = getProductRecipeInfo(product);
+    const isRecipeItem = Boolean(recInfo && (recInfo.ingredient_count > 0 || recInfo.unit_cost > 0));
+    const isRaw = Boolean(product.is_raw_material || (product.category_name && product.category_name.includes('วัตถุดิบ')));
+
+    let initialType = 'standard';
+    if (isRecipeItem) initialType = 'finished_goods';
+    else if (isRaw) initialType = 'raw_material';
+    setProductType(initialType);
+    setSelectedLinkedRecipeId(isRecipeItem ? product.id : '');
+
+    const cost = isRecipeItem
+      ? (recInfo.unit_cost ?? product.cost_price)
+      : (product.pending_cost_price ?? product.cost_price);
     const netW = product.net_weight ?? 1;
     const normalizedUnit = normalizeUnitKey(product.unit);
     setForm({
@@ -340,10 +523,10 @@ export default function ProductsPage() {
       description: product.description || '', category_id: product.category_id || '',
       cost_price: cost, selling_price: product.selling_price,
       image_url: product.image_url || '', is_featured: Boolean(product.is_featured),
-      is_raw_material: Boolean(product.is_raw_material), unit: normalizedUnit, net_weight: netW,
-      reorder_level: 5, is_active: product.is_active,
+      is_raw_material: isRaw, unit: normalizedUnit, net_weight: netW,
+      reorder_level: product.reorder_level ?? 5, is_active: product.is_active,
     });
-    setPackTotalPrice(cost && netW > 1 ? (cost * netW).toFixed(2) : '');
+    setPackTotalPrice(cost && netW > 1 && !isRecipeItem ? (cost * netW).toFixed(2) : '');
     setEditingProduct(product);
     setPackLocked(false);
     setShowForm(true);
@@ -351,6 +534,10 @@ export default function ProductsPage() {
 
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const handleDelete = async () => {
+    if (!canMaintain) {
+      toast.error('คุณมีสิทธิ์ดูข้อมูลเท่านั้น');
+      return;
+    }
     try {
       await api.delete(`/products/${deleteConfirm.id}`);
       toast.success(`ลบ "${deleteConfirm.name}" สำเร็จ`);
@@ -360,29 +547,27 @@ export default function ProductsPage() {
   };
 
   const handleToggleRawMaterial = async (product) => {
+    if (!canMaintain) {
+      toast.error('คุณมีสิทธิ์ดูข้อมูลเท่านั้น');
+      return;
+    }
+    const isCurrentlyRaw = Boolean(product.is_raw_material === 1 || product.is_raw_material === true || (product.category_name && product.category_name.includes('วัตถุดิบ')));
+    if (isCurrentlyRaw) {
+      toast.error('สินค้าประเภทวัตถุดิบถูกล็อก ไม่สามารถเปลี่ยนเป็นสินค้าขายหน้าร้าน (POS) ได้');
+      return;
+    }
     try {
-      const isCurrentlyRaw = Boolean(product.is_raw_material === 1 || product.is_raw_material === true || (product.category_name && product.category_name.includes('วัตถุดิบ')));
-      const newIsRaw = isCurrentlyRaw ? 0 : 1;
-      let newSellingPrice = product.selling_price;
-
-      if (newIsRaw === 0 && (!product.selling_price || product.selling_price <= 0)) {
-        const inputPrice = window.prompt(`ระบุราคาขายหน้าร้านสำหรับ "${product.name}" (บาท):`, '15');
-        if (inputPrice === null) return;
-        newSellingPrice = parseFloat(inputPrice) || 0;
-      }
-
-      const targetCategoryId = (newIsRaw === 0 && product.category_name && product.category_name.includes('วัตถุดิบ'))
-        ? null
-        : product.category_id;
+      const rawCat = categories.find(c => c.name === 'วัตถุดิบ' || c.is_raw_material);
+      const targetCategoryId = rawCat ? rawCat.id : product.category_id;
 
       await api.put(`/products/${product.id}`, {
         ...product,
         category_id: targetCategoryId,
-        is_raw_material: newIsRaw,
-        selling_price: newIsRaw === 1 ? 0 : newSellingPrice,
+        is_raw_material: 1,
+        selling_price: 0,
         is_active: true
       });
-      toast.success(newIsRaw === 1 ? `เปลี่ยน "${product.name}" เป็นวัตถุดิบสำเร็จ` : `เปิดขาย "${product.name}" หน้าร้านสำเร็จ (฿${newSellingPrice})`);
+      toast.success(`เปลี่ยน "${product.name}" เป็นวัตถุดิบสำเร็จ`);
       loadProducts();
     } catch (err) {
       toast.error(err.response?.data?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะ');
@@ -406,6 +591,10 @@ export default function ProductsPage() {
   };
 
   const handleRestore = async () => {
+    if (!canMaintain) {
+      toast.error('คุณมีสิทธิ์ดูข้อมูลเท่านั้น');
+      return;
+    }
     try {
       await api.post(`/products/${restoreConfirm.id}/restore`);
       toast.success(`กู้คืน "${restoreConfirm.name}" สำเร็จ`);
@@ -430,6 +619,8 @@ export default function ProductsPage() {
   const editingStock = editingProduct ? Number(editingProduct.stock_quantity) || 0 : 0;
   const editingFormCost = form.cost_price === '' ? null : Number(form.cost_price);
   const editingCostWillQueue = Boolean(editingProduct) && editingStock > 0 && editingFormCost !== null && !Number.isNaN(editingFormCost) && editingFormCost !== editingCurrentCost;
+  const editingRecipeInfo = editingProduct ? getProductRecipeInfo(editingProduct) : null;
+  const isEditingRecipeProduct = Boolean(editingRecipeInfo && (editingRecipeInfo.ingredient_count > 0 || editingRecipeInfo.unit_cost > 0));
 
   return (
     <div className="p-6 overflow-y-auto h-[calc(100vh-56px)]">
@@ -440,9 +631,11 @@ export default function ProductsPage() {
             className="btn-ghost !py-2 !px-4 text-sm flex items-center gap-1.5">
             🗑️ สินค้าที่ลบแล้ว
           </button>
-          <button onClick={async () => { await resetForm(); setEditingProduct(null); setShowForm(true); }} className="btn-primary">
-            + เพิ่มสินค้า
-          </button>
+          {canMaintain && (
+            <button onClick={async () => { await resetForm(); setEditingProduct(null); setShowForm(true); }} className="btn-primary">
+              + เพิ่มสินค้า
+            </button>
+          )}
         </div>
       </div>
 
@@ -454,8 +647,8 @@ export default function ProductsPage() {
         className="input-field mb-4 max-w-md"
       />
 
-      {/* ตารางสินค้า */}
-      <div className="card overflow-x-auto">
+      {/* ตารางสินค้า (Desktop View >= md) */}
+      <div className="hidden md:block card overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-gray-500">
@@ -464,72 +657,287 @@ export default function ProductsPage() {
               <th className="py-3 px-2">หมวดหมู่</th>
               <th className="py-3 px-2 text-right">ต้นทุน</th>
               <th className="py-3 px-2 text-right">ราคาขาย</th>
-              <th className="py-3 px-2 text-right">สต๊อก</th>
+              <th className="py-3 px-2 text-right">จุดสั่งซื้อ</th>
               <th className="py-3 px-2">จัดการ</th>
             </tr>
           </thead>
           <tbody>
-            {productsPaging.paged.map((product) => (
-              <tr key={product.id} className="border-b border-gray-50 hover:bg-gray-50">
-                <td className="py-2 px-2 text-gray-600">{product.sku}</td>
-                <td className="py-2 px-2 font-medium">
-                  {!!product.is_featured && <span className="text-yellow-500 mr-1">⭐</span>}
-                  {!!product.is_raw_material && <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-full border border-indigo-200 mr-1.5 inline-block">🧪 วัตถุดิบ</span>}
-                  {product.name}
-                </td>
-                <td className="py-2 px-2 text-gray-500">{product.category_name}</td>
-                <td className="py-2 px-2 text-right text-gray-500">
-                  <div className="flex flex-col items-end">
-                    <span className="font-semibold text-gray-700">
-                      {formatCurrency(product.cost_price)} <span className="text-xs text-gray-400 font-normal">/ {product.unit || 'ชิ้น'}</span>
-                    </span>
-                    {product.net_weight && product.net_weight > 1 && (
-                      <span className="text-[10px] text-indigo-600 font-semibold whitespace-nowrap">
-                        (฿{(product.cost_price * product.net_weight).toFixed(2)} / แพ็ค {product.net_weight} {product.unit})
-                      </span>
-                    )}
-                    {product.pending_cost_price !== null && product.pending_cost_price !== undefined && product.stock_quantity > 0 && (() => {
-                      const oldRemain = product.stock_quantity - (product.last_receive_qty || 0);
-                      return (
-                        <span className="text-[10px] text-amber-600 font-medium whitespace-nowrap">
-                          คิวถัดไป: {formatCurrency(product.pending_cost_price)} {oldRemain > 0 ? `(เหลืออีก ${oldRemain} ${product.unit || 'ชิ้น'})` : '(มีผลรายการถัดไป)'}
+            {productsPaging.paged.map((product) => {
+              const recipeInfo = getProductRecipeInfo(product);
+              const isRecipeItem = Boolean(recipeInfo && (recipeInfo.ingredient_count > 0 || recipeInfo.unit_cost > 0));
+              const isRaw = Boolean(product.is_raw_material || (product.category_name && product.category_name.includes('วัตถุดิบ')));
+              const effectiveCost = isRecipeItem 
+                ? (recipeInfo.unit_cost ?? product.cost_price) 
+                : product.cost_price;
+
+              return (
+                <tr key={product.id} className="border-b border-gray-50 hover:bg-gray-50 dark:border-slate-800 dark:hover:bg-slate-800/40">
+                  <td className="py-2 px-2 text-gray-600 dark:text-slate-400 font-mono text-xs">{product.sku}</td>
+                  <td className="py-2 px-2 font-medium text-gray-900 dark:text-slate-100">
+                    {!!product.is_featured && <span className="text-yellow-500 mr-1" title="สินค้าแนะนำ">⭐</span>}
+                    {product.name}
+                  </td>
+                  <td className="py-2 px-2 whitespace-nowrap">
+                    <div className="flex flex-col items-start gap-0.5">
+                      {isRaw ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800">
+                          <span>📦</span>
+                          <span>วัตถุดิบ</span>
                         </span>
-                      );
-                    })()}
-                  </div>
-                </td>
+                      ) : isRecipeItem ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full border bg-cyan-50 text-cyan-800 border-cyan-200 dark:bg-cyan-950/60 dark:text-cyan-300 dark:border-cyan-800">
+                          <span>🧪</span>
+                          <span>สินค้าสำเร็จรูป</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full border bg-indigo-50 text-indigo-800 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800">
+                          <span>🛍️</span>
+                          <span>สินค้าทั่วไป</span>
+                        </span>
+                      )}
+                      {product.category_name && !product.category_name.includes('วัตถุดิบ') && (
+                        <span className="text-[10px] text-gray-400 dark:text-slate-500 font-medium pl-1">
+                          {product.category_name}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-2 px-2 text-right text-gray-500">
+                    <div className="flex flex-col items-end">
+                      <div className="flex items-center gap-1">
+                        {isRecipeItem && (
+                          <span 
+                            title={`ต้นทุนคำนวณจากสูตรอาหาร (${recipeInfo.ingredient_count || 1} วัตถุดิบ)`}
+                            className="text-[10px] bg-cyan-50 text-cyan-700 font-bold px-1.5 py-0.5 rounded border border-cyan-200 inline-flex items-center gap-0.5"
+                          >
+                            🧪 ตามสูตร
+                          </span>
+                        )}
+                        <span className="font-semibold text-gray-700">
+                          {formatCurrency(effectiveCost)} <span className="text-xs text-gray-400 font-normal">/ {product.unit || 'ชิ้น'}</span>
+                        </span>
+                      </div>
+
+                        {product.net_weight && product.net_weight > 1 && !isRecipeItem && (
+                          <span className="text-[10px] text-indigo-600 font-semibold whitespace-nowrap">
+                            (฿{(effectiveCost * product.net_weight).toFixed(2)} / แพ็ค {product.net_weight} {product.unit})
+                          </span>
+                        )}
+
+                        {product.pending_cost_price !== null && product.pending_cost_price !== undefined && product.pending_cost_price !== product.cost_price && !isRecipeItem && product.stock_quantity > 0 && (() => {
+                          const oldRemain = product.stock_quantity - (product.last_receive_qty || 0);
+                          return (
+                            <span className="text-[10px] text-amber-600 font-medium whitespace-nowrap">
+                              คิวถัดไป: {formatCurrency(product.pending_cost_price)} {oldRemain > 0 ? `(เหลืออีก ${oldRemain} ${product.unit || 'ชิ้น'})` : '(มีผลรายการถัดไป)'}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                  </td>
                 <td className="py-2 px-2 text-right font-semibold">
                   {product.is_raw_material ? <span className="text-gray-400 font-normal text-xs">ไม่ขายหน้าร้าน</span> : formatCurrency(product.selling_price)}
                 </td>
-                <td className={`py-2 px-2 text-right font-semibold ${product.stock_quantity <= 5 ? 'text-red-500' : 'text-green-600'}`}>
-                  {formatQty(product.stock_quantity)}
+                <td className="py-2 px-2 text-right font-semibold text-gray-700 dark:text-slate-200">
+                  {formatQty(product.reorder_level ?? 5)}
                 </td>
                 <td className="py-2 px-2">
-                  <div className="flex items-center gap-2">
-                    <button 
-                      onClick={() => handleToggleRawMaterial(product)}
-                      title={product.is_raw_material ? "เปลี่ยนเป็นสินค้าขาย POS หน้าร้าน" : "เปลี่ยนเป็นวัตถุดิบ/ส่วนผสม"}
-                      className={"text-xs px-2 py-1 rounded-lg font-medium transition-all flex items-center gap-1 border " +
-                        (product.is_raw_material
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
-                          : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100")}
-                    >
-                      {product.is_raw_material ? '🛍️ เปิดขาย POS' : '🧪 เป็นวัตถุดิบ'}
-                    </button>
-                    <span className="text-gray-200">|</span>
-                    <button onClick={() => editProduct(product)} className="text-blue-600 hover:underline text-sm font-medium">
-                      แก้ไข
-                    </button>
-                    <span className="text-gray-200">|</span>
-                    <button onClick={() => setDeleteConfirm(product)} className="text-red-500 hover:underline text-sm">
-                      ลบ
-                    </button>
-                  </div>
+                  {canMaintain ? (
+                    <div className="flex items-center gap-2">
+                      {product.is_raw_material ? (
+                        <span 
+                          title="สินค้าประเภทวัตถุดิบถูกล็อก ไม่สามารถเปลี่ยนเป็นสินค้าขาย POS ได้"
+                          className="text-xs px-2 py-1 rounded-lg font-medium bg-gray-100 text-gray-400 dark:bg-slate-800 dark:text-slate-500 border border-gray-200 dark:border-slate-700 flex items-center gap-1 cursor-not-allowed select-none"
+                        >
+                          🔒 ล็อกวัตถุดิบ
+                        </span>
+                      ) : (
+                        <button 
+                          onClick={() => handleToggleRawMaterial(product)}
+                          title="เปลี่ยนเป็นวัตถุดิบ/ส่วนผสม"
+                          className="text-xs px-2 py-1 rounded-lg font-medium transition-all flex items-center gap-1 border bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+                        >
+                          🧪 เป็นวัตถุดิบ
+                        </button>
+                      )}
+                      <span className="text-gray-200">|</span>
+                      <button onClick={() => editProduct(product)} className="text-blue-600 hover:underline text-sm font-medium">
+                        แก้ไข
+                      </button>
+                      <span className="text-gray-200">|</span>
+                      <button onClick={() => setDeleteConfirm(product)} className="text-red-500 hover:underline text-sm">
+                        ลบ
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-gray-400 italic">ดูอย่างเดียว</span>
+                  )}
                 </td>
               </tr>
-            ))}
+            );
+          })}
           </tbody>
         </table>
+      </div>
+
+      {/* การ์ดรายการสินค้า (Mobile / PWA View < md) */}
+      <div className="block md:hidden space-y-3">
+        {productsPaging.paged.map((product) => {
+          const recipeInfo = getProductRecipeInfo(product);
+          const isRecipeItem = Boolean(recipeInfo && (recipeInfo.ingredient_count > 0 || recipeInfo.unit_cost > 0));
+          const effectiveCost = isRecipeItem 
+            ? (recipeInfo.unit_cost ?? product.cost_price) 
+            : product.cost_price;
+          const isLowStock = product.stock_quantity <= (product.reorder_level || 5);
+
+          return (
+            <div
+              key={product.id}
+              className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-3"
+            >
+              {/* Header: Name, Badges, Selling Price */}
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {!!product.is_featured && <span title="สินค้าแนะนำ">⭐</span>}
+                    <h3 className="font-bold text-gray-900 text-base leading-snug break-words">
+                      {product.name}
+                    </h3>
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                    <span className="text-[11px] font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
+                      {product.sku}
+                    </span>
+                    {product.category_name && (
+                      <span className="text-[11px] text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                        {product.category_name}
+                      </span>
+                    )}
+                    {product.is_raw_material ? (
+                      <span className="text-[10px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-full">
+                        📦 วัตถุดิบ
+                      </span>
+                    ) : isRecipeItem ? (
+                      <span className="text-[10px] font-bold text-cyan-800 bg-cyan-100/90 px-2 py-0.5 rounded-full">
+                        🧪 สินค้าสำเร็จรูป
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold text-indigo-800 bg-indigo-100/90 px-2 py-0.5 rounded-full">
+                        🛍️ สินค้าทั่วไป
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Selling Price / Indicator */}
+                <div className="text-right flex-shrink-0">
+                  <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+                    {product.is_raw_material ? 'ประเภท' : 'ราคาขาย'}
+                  </div>
+                  {product.is_raw_material ? (
+                    <span className="inline-block mt-0.5 text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-lg font-medium">
+                      ไม่ขายหน้าร้าน
+                    </span>
+                  ) : (
+                    <div className="text-xl font-black text-indigo-600 font-mono leading-tight mt-0.5">
+                      {formatCurrency(product.selling_price)}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Stats Grid: Cost & Stock */}
+              <div className="grid grid-cols-2 gap-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100 text-xs">
+                {/* Cost info */}
+                <div>
+                  <span className="text-gray-400 block text-[11px]">ต้นทุนต่อหน่วย:</span>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    {isRecipeItem && (
+                      <span className="text-[9px] bg-cyan-100 text-cyan-800 font-bold px-1 rounded">
+                        ตามสูตร
+                      </span>
+                    )}
+                    <span className="font-bold text-gray-800">
+                      {formatCurrency(effectiveCost)}
+                    </span>
+                    <span className="text-gray-400 text-[11px]">/ {product.unit || 'ชิ้น'}</span>
+                  </div>
+                  {product.net_weight && product.net_weight > 1 && !isRecipeItem && (
+                    <p className="text-[10px] text-indigo-600 mt-0.5 truncate">
+                      ยกแพ็ค ฿{(effectiveCost * product.net_weight).toFixed(2)} ({product.net_weight} {product.unit})
+                    </p>
+                  )}
+                  {product.pending_cost_price !== null && product.pending_cost_price !== undefined && product.pending_cost_price !== product.cost_price && !isRecipeItem && product.stock_quantity > 0 && (
+                    <p className="text-[10px] text-amber-600 mt-0.5">
+                      คิวถัดไป: {formatCurrency(product.pending_cost_price)}
+                    </p>
+                  )}
+                </div>
+
+                {/* Reorder Level info */}
+                <div className="text-right border-l border-gray-200/60 pl-2">
+                  <span className="text-gray-400 block text-[11px]">จุดสั่งซื้อ:</span>
+                  <div className="font-mono font-bold text-base mt-0.5 text-gray-800 dark:text-slate-200">
+                    {formatQty(product.reorder_level ?? 5)}
+                    <span className="text-xs font-normal text-gray-500 ml-1">{product.unit || 'ชิ้น'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons Row */}
+              {canMaintain && (
+                <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+                  {product.is_raw_material ? (
+                    <div 
+                      title="สินค้าประเภทวัตถุดิบถูกล็อก ไม่สามารถเปลี่ยนเป็นสินค้าขาย POS ได้"
+                      className="flex-1 py-2 px-2.5 rounded-xl font-medium text-xs border border-gray-200 dark:border-slate-700 bg-gray-100 dark:bg-slate-800 text-gray-400 dark:text-slate-500 flex items-center justify-center gap-1 cursor-not-allowed select-none"
+                    >
+                      <span>🔒</span>
+                      <span>ล็อกวัตถุดิบ</span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleToggleRawMaterial(product)}
+                      title="เปลี่ยนเป็นวัตถุดิบ/ส่วนผสม"
+                      className="flex-1 py-2 px-2.5 rounded-xl font-bold text-xs border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 active:scale-95 transition-all flex items-center justify-center gap-1"
+                    >
+                      <span>🧪</span>
+                      <span>เปลี่ยนเป็นวัตถุดิบ</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => editProduct(product)}
+                    className="py-2 px-3 rounded-xl font-bold text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 active:scale-95 transition-all flex items-center gap-1"
+                  >
+                    <span>✏️</span>
+                    <span>แก้ไข</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeleteConfirm(product)}
+                    className="py-2 px-3 rounded-xl font-bold text-xs bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 active:scale-95 transition-all flex items-center gap-1"
+                  >
+                    <span>🗑️</span>
+                    <span>ลบ</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {filtered.length === 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 text-center text-gray-400 py-10">
+            ไม่พบสินค้า
+          </div>
+        )}
+      </div>
+
+      {/* Pagination */}
+      <div className="card mt-3">
         <Pagination
           page={productsPaging.page}
           totalPages={productsPaging.totalPages}
@@ -542,57 +950,156 @@ export default function ProductsPage() {
         />
       </div>
 
-      {/* Modal ฟอร์ม */}
+      {/* Modal ฟอร์ม (Add / Edit Product) */}
       {showForm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-bold mb-4">{editingProduct ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</h2>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[94vh] flex flex-col overflow-hidden animate-scale-up">
+            
+            {/* Modal Header (Sticky at top) */}
+            <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between bg-gray-50/80 flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">{editingProduct ? '✏️' : '📦'}</span>
+                <h2 className="text-lg sm:text-xl font-bold text-gray-800">
+                  {editingProduct ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowForm(false)}
+                className="w-8 h-8 rounded-full bg-gray-200/70 hover:bg-gray-200 text-gray-600 flex items-center justify-center text-sm font-bold transition-all active:scale-95"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body (Scrollable) */}
+            <form id="productForm" onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+              {/* Row 1: SKU & Barcode */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">รหัสสินค้า (SKU)</label>
+                  <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-1">รหัสสินค้า (SKU)</label>
                   <div className="relative">
                     <input value={form.sku} readOnly
-                      className="input-field bg-gray-50 text-gray-500 cursor-not-allowed font-mono pr-10" />
+                      className="input-field bg-gray-50 text-gray-500 cursor-not-allowed font-mono pr-10 !py-2 text-sm" />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔒</span>
                   </div>
-                  <p className="text-xs text-gray-400 mt-1">สร้างอัตโนมัติ ไม่สามารถแก้ไขได้</p>
+                  <p className="text-[11px] text-gray-400 mt-1">สร้างอัตโนมัติ ไม่สามารถแก้ไขได้</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">บาร์โค้ด</label>
+                  <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-1">บาร์โค้ด</label>
                   <div className="flex gap-2">
                     <input 
                       value={form.barcode} 
                       onChange={(e) => setForm(f => ({ ...f, barcode: e.target.value }))}
                       readOnly={!!editingProduct?.barcode}
-                      className={"input-field flex-1 " + (editingProduct?.barcode ? "bg-gray-50 text-gray-500 cursor-not-allowed" : "")} 
+                      className={"input-field flex-1 !py-2 text-sm " + (editingProduct?.barcode ? "bg-gray-50 text-gray-500 cursor-not-allowed" : "")} 
                       placeholder="กรอก หรือ สแกนบาร์โค้ด" 
                     />
                     {!editingProduct?.barcode && (
                       <button type="button" onClick={() => setShowScanner(true)}
                         title="สแกนบาร์โค้ดด้วยกล้อง"
-                        className="flex-shrink-0 w-11 h-11 rounded-xl text-white flex items-center justify-center shadow hover:opacity-90 active:scale-95 transition-all"
+                        className="flex-shrink-0 w-10 h-10 rounded-xl text-white flex items-center justify-center shadow hover:opacity-90 active:scale-95 transition-all"
                         style={{ backgroundImage: 'linear-gradient(to left,#3300FC,#95008A,#EB0000)' }}>
-                        <ScanIcon size={22} color="white" strokeWidth={2} />
+                        <ScanIcon size={20} color="white" strokeWidth={2} />
                       </button>
                     )}
                     {editingProduct?.barcode && (
-                      <div className="flex-shrink-0 w-11 h-11 rounded-xl bg-gray-100 flex items-center justify-center text-gray-400 border border-gray-200" title="บาร์โค้ดถูกล็อกแล้ว">
+                      <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-gray-400 border border-gray-200" title="บาร์โค้ดถูกล็อกแล้ว">
                         🔒
                       </div>
                     )}
                   </div>
                 </div>
               </div>
+
+              {/* ตัวเลือกประเภทสินค้า (Product Type) */}
               <div>
-                <label className="block text-sm font-medium mb-1">ชื่อสินค้า*</label>
-                <input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
-                  className="input-field" required />
+                <label className="block text-xs sm:text-sm font-bold text-gray-700 dark:text-slate-200 mb-1.5 flex items-center justify-between">
+                  <span>ประเภทสินค้า <span className="text-red-500">*</span></span>
+                  {isExistingRawMaterial && (
+                    <span className="text-xs font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                      🔒 ล็อกประเภทวัตถุดิบ
+                    </span>
+                  )}
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    disabled={isExistingRawMaterial}
+                    onClick={() => handleSelectProductType('standard')}
+                    title={isExistingRawMaterial ? "สินค้าประเภทวัตถุดิบถูกล็อก ไม่สามารถเปลี่ยนเป็นสินค้าขาย POS ได้" : "สินค้าทั่วไป (ซื้อมาขายไป)"}
+                    className={`flex flex-col items-center justify-center p-2.5 sm:p-3 rounded-2xl border text-center transition-all ${
+                      isExistingRawMaterial
+                        ? 'opacity-40 cursor-not-allowed bg-gray-50 border-gray-200 dark:bg-slate-800/40 dark:border-slate-700/60 text-gray-400 dark:text-slate-500'
+                        : productType === 'standard'
+                        ? 'border-indigo-600 bg-indigo-50/80 text-indigo-950 shadow-sm ring-2 ring-indigo-500/20 font-bold dark:bg-indigo-950/40 dark:border-indigo-500 dark:text-indigo-200 dark:ring-indigo-500/30'
+                        : 'border-gray-200 bg-white hover:bg-gray-50 text-gray-600 dark:bg-slate-800/80 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/80'
+                    }`}
+                  >
+                    <span className="text-xl sm:text-2xl mb-1">🛍️</span>
+                    <span className="text-xs font-bold leading-tight">สินค้าทั่วไป</span>
+                    <span className="text-[10px] text-gray-400 dark:text-slate-400 mt-0.5 leading-tight hidden sm:block">
+                      {isExistingRawMaterial ? '🔒 ล็อก' : 'ซื้อมาขายไป'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isExistingRawMaterial}
+                    onClick={() => handleSelectProductType('finished_goods')}
+                    title={isExistingRawMaterial ? "สินค้าประเภทวัตถุดิบถูกล็อก ไม่สามารถเปลี่ยนเป็นสินค้าขาย POS ได้" : "สินค้าสำเร็จรูป (คำนวณตามสูตร)"}
+                    className={`flex flex-col items-center justify-center p-2.5 sm:p-3 rounded-2xl border text-center transition-all ${
+                      isExistingRawMaterial
+                        ? 'opacity-40 cursor-not-allowed bg-gray-50 border-gray-200 dark:bg-slate-800/40 dark:border-slate-700/60 text-gray-400 dark:text-slate-500'
+                        : productType === 'finished_goods'
+                        ? 'border-cyan-600 bg-cyan-50/80 text-cyan-950 shadow-sm ring-2 ring-cyan-500/20 font-bold dark:bg-cyan-950/40 dark:border-cyan-500 dark:text-cyan-200 dark:ring-cyan-500/30'
+                        : 'border-gray-200 bg-white hover:bg-gray-50 text-gray-600 dark:bg-slate-800/80 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/80'
+                    }`}
+                  >
+                    <span className="text-xl sm:text-2xl mb-1">🧪</span>
+                    <span className="text-xs font-bold leading-tight">สินค้าสำเร็จรูป</span>
+                    <span className="text-[10px] text-cyan-600 dark:text-cyan-400 mt-0.5 leading-tight font-medium hidden sm:block">
+                      {isExistingRawMaterial ? '🔒 ล็อก' : 'คำนวณตามสูตร'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSelectProductType('raw_material')}
+                    className={`flex flex-col items-center justify-center p-2.5 sm:p-3 rounded-2xl border text-center transition-all ${
+                      productType === 'raw_material'
+                        ? 'border-amber-600 bg-amber-50/80 text-amber-950 shadow-sm ring-2 ring-amber-500/20 font-bold dark:bg-amber-950/40 dark:border-amber-500 dark:text-amber-200 dark:ring-amber-500/30'
+                        : 'border-gray-200 bg-white hover:bg-gray-50 text-gray-600 dark:bg-slate-800/80 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700/80'
+                    }`}
+                  >
+                    <span className="text-xl sm:text-2xl mb-1">📦</span>
+                    <span className="text-xs font-bold leading-tight">วัตถุดิบ</span>
+                    <span className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 leading-tight hidden sm:block font-medium">
+                      {isExistingRawMaterial ? '🔒 ตัดสต๊อก (ล็อก)' : 'ตัดสต๊อก'}
+                    </span>
+                  </button>
+                </div>
+                {isExistingRawMaterial && (
+                  <div className="mt-2 p-2.5 bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/50 rounded-xl flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+                    <span className="text-base flex-shrink-0">🔒</span>
+                    <p className="leading-snug">
+                      สินค้านี้เป็น <b>วัตถุดิบ</b> ระบบล็อกไว้ไม่สามารถเปลี่ยนเป็นสินค้าขายหน้าร้าน (POS) ได้ เพื่อความถูกต้องของคลังและสูตรการผลิต
+                    </p>
+                  </div>
+                )}
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
+
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-1">ชื่อสินค้า*</label>
+                <input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
+                  className="input-field !py-2 text-sm" placeholder="ระบุชื่อสินค้า..." required />
+              </div>
+
+              {/* หมวดหมู่, หน่วยนับ, ปริมาณสุทธิ */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-1">
                   <div className="flex justify-between items-center mb-1">
-                    <label className="block text-sm font-medium">หมวดหมู่*</label>
+                    <label className="block text-xs sm:text-sm font-semibold text-gray-700">หมวดหมู่*</label>
                     <button
                       type="button"
                       onClick={() => setShowAddCategoryModal(true)}
@@ -606,187 +1113,300 @@ export default function ProductsPage() {
                     onChange={(e) => {
                       const selectedCatId = e.target.value;
                       const catObj = categories.find(c => c.id === selectedCatId);
-                      const isRawMat = catObj && (catObj.name === 'วัตถุดิบ' || catObj.name.includes('วัตถุดิบ'));
+                      const isRawMat = catObj && (catObj.name === 'วัตถุดิบ' || catObj.name.includes('วัตถุดิบ') || catObj.is_raw_material);
+                      if (isExistingRawMaterial && !isRawMat && selectedCatId !== '') {
+                        toast.error('สินค้าประเภทวัตถุดิบต้องอยู่ในหมวดหมู่วัตถุดิบเท่านั้น');
+                        return;
+                      }
                       setForm(f => ({
                         ...f,
                         category_id: selectedCatId,
-                        is_raw_material: isRawMat ? true : (catObj && !isRawMat ? false : f.is_raw_material),
-                        selling_price: isRawMat ? '0' : f.selling_price,
+                        is_raw_material: isExistingRawMaterial ? true : (isRawMat ? true : (catObj && !isRawMat ? false : f.is_raw_material)),
+                        selling_price: (isExistingRawMaterial || isRawMat) ? '0' : f.selling_price,
                         unit: (isRawMat && !editingProduct && (f.unit === 'ชิ้น' || !f.unit)) ? 'g' : f.unit
                       }));
                     }}
-                    className="input-field bg-white"
+                    className="input-field bg-white !py-2 text-sm font-medium"
                     required
                   >
                     <option value="">-- เลือกหมวดหมู่ --</option>
-                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {categories.map((c) => {
+                      const isCatRaw = Boolean(c.is_raw_material || c.name === 'วัตถุดิบ' || c.name.includes('วัตถุดิบ'));
+                      return (
+                        <option key={c.id} value={c.id} disabled={isExistingRawMaterial && !isCatRaw}>
+                          {c.name}{isExistingRawMaterial && !isCatRaw ? ' (ล็อกเฉพาะวัตถุดิบ)' : ''}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="block text-sm font-medium">หน่วยนับ</label>
-                    <button
-                      type="button"
-                      onClick={() => setShowAddUnitModal(true)}
-                      className="text-xs text-indigo-600 hover:text-indigo-800 font-bold hover:underline flex items-center gap-0.5"
+
+                <div className="grid grid-cols-2 gap-2.5 sm:col-span-2">
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block text-xs sm:text-sm font-semibold text-gray-700">หน่วยนับ</label>
+                      <button
+                        type="button"
+                        onClick={() => setShowAddUnitModal(true)}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 font-bold hover:underline"
+                      >
+                        + เพิ่ม
+                      </button>
+                    </div>
+                    <select
+                      value={form.unit || 'ชิ้น'}
+                      onChange={(e) => {
+                        const selectedUnit = normalizeUnitKey(e.target.value);
+                        setForm(f => ({ ...f, unit: selectedUnit }));
+                      }}
+                      className="input-field bg-white !py-2 text-sm font-medium"
                     >
-                      + เพิ่มหน่วยนับ
-                    </button>
+                      {getAvailableUnits().map((u) => (
+                        <option key={u.value} value={u.value}>{u.label}</option>
+                      ))}
+                    </select>
                   </div>
-                  <select
-                    value={form.unit || 'ชิ้น'}
-                    onChange={(e) => {
-                      const selectedUnit = normalizeUnitKey(e.target.value);
-                      setForm(f => ({ ...f, unit: selectedUnit }));
-                    }}
-                    className="input-field bg-white font-medium"
-                  >
-                    {getAvailableUnits().map((u) => (
-                      <option key={u.value} value={u.value}>{u.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    ปริมาณสุทธิ/น้ำหนัก <span className="text-xs font-normal text-gray-500">({form.unit || 'หน่วย'})</span>
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0.0001"
-                    value={form.net_weight}
-                    onChange={(e) => {
-                      const netW = e.target.value;
-                      setForm(f => {
-                        const updated = { ...f, net_weight: netW };
-                        if (packTotalPrice && parseFloat(netW) > 0) {
-                          const calc = parseFloat(packTotalPrice) / parseFloat(netW);
-                          updated.cost_price = Number(calc.toFixed(4)).toString();
-                        }
-                        return updated;
-                      });
-                    }}
-                    className="input-field bg-white"
-                    placeholder="เช่น 1, 500, 1000"
-                    required
-                  />
+
+                  <div>
+                    <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-1 truncate">
+                      ปริมาณสุทธิ <span className="text-gray-400 font-normal">({form.unit || 'หน่วย'})</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0.0001"
+                      value={form.net_weight}
+                      onChange={(e) => {
+                        const netW = e.target.value;
+                        setForm(f => {
+                          const updated = { ...f, net_weight: netW };
+                          if (packTotalPrice && parseFloat(netW) > 0) {
+                            const calc = parseFloat(packTotalPrice) / parseFloat(netW);
+                            updated.cost_price = Number(calc.toFixed(4)).toString();
+                          }
+                          return updated;
+                        });
+                      }}
+                      className="input-field bg-white !py-2 text-sm"
+                      placeholder="เช่น 1, 500"
+                      required
+                    />
+                  </div>
                 </div>
               </div>
 
               {/* ส่วนจัดการต้นทุน & ราคารวมแพ็ค */}
-              <div className="grid grid-cols-2 gap-4 bg-slate-50/70 p-3.5 rounded-xl border border-slate-200">
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    ราคารวมยกแพ็ค (บาท) <span className="text-xs font-normal text-indigo-600">(คำนวณให้อัตโนมัติ)</span>
-                  </label>
+              {(isEditingRecipeProduct || productType === 'finished_goods') ? (
+                <div className="p-4 bg-gradient-to-r from-cyan-50 to-blue-50 dark:bg-gradient-to-br dark:from-cyan-950/40 dark:via-slate-900/90 dark:to-blue-950/30 border border-cyan-200 dark:border-cyan-500/30 rounded-2xl space-y-3 shadow-sm dark:shadow-inner">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2.5">
+                      <span className="text-2xl mt-0.5">🧪</span>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-bold text-cyan-950 dark:text-cyan-200">สินค้าสำเร็จรูป ผลิตตามสูตรอาหาร (BOM)</h4>
+                          <span className="text-[10px] bg-cyan-200 text-cyan-800 dark:bg-cyan-900/80 dark:text-cyan-300 dark:border dark:border-cyan-500/40 font-bold px-2 py-0.5 rounded-full">
+                            คำนวณตามสูตร
+                          </span>
+                        </div>
+                        <p className="text-xs text-cyan-700 dark:text-cyan-300/80 mt-1">
+                          ต้นทุนจะถูกคำนวณจากวัตถุดิบในสูตรอาหารโดยอัตโนมัติ {isEditingRecipeProduct ? `(${editingRecipeInfo.ingredient_count || 1} ส่วนผสม)` : ''} คุณไม่จำเป็นต้องกรอกหรือดูแลราคาต้นทุนเอง
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {!editingProduct && (
+                    <div className="bg-white/90 dark:bg-slate-800/80 rounded-xl p-3 border border-cyan-200 dark:border-cyan-500/20 space-y-2">
+                      <label className="block text-xs font-bold text-cyan-950 dark:text-cyan-200">
+                        🔗 เลือกคัดลอกสูตรจากสินค้าอื่น (ไม่บังคับ):
+                      </label>
+                      <select
+                        value={selectedLinkedRecipeId}
+                        onChange={(e) => {
+                          const recProdId = e.target.value;
+                          setSelectedLinkedRecipeId(recProdId);
+                          if (recProdId && recipeSummaryMap[recProdId]) {
+                            setForm(f => ({
+                              ...f,
+                              cost_price: recipeSummaryMap[recProdId].unit_cost.toString()
+                            }));
+                          }
+                        }}
+                        className="input-field bg-white dark:bg-slate-900 text-xs font-medium dark:text-slate-100 dark:border-slate-700"
+                      >
+                        <option value="">-- ยังไม่มีสูตร (สร้างสูตรวัตถุดิบทีหลังได้ที่หน้ารายการสูตร) --</option>
+                        {Object.values(recipeSummaryMap).map(rec => (
+                          <option key={rec.product_id} value={rec.product_id}>
+                            {rec.product_name} (ต้นทุน: {formatCurrency(rec.unit_cost)} / {rec.portion_unit || 'หน่วย'})
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-cyan-700 dark:text-cyan-400/80">
+                        {selectedLinkedRecipeId
+                          ? '✨ ระบบจะคัดลอกส่วนผสมและคำนวณต้นทุนให้อัตโนมัติทันทีที่กดบันทึก'
+                          : '💡 บันทึกเสร็จแล้ว สามารถไปกำหนดวัตถุดิบและสัดส่วนที่เมนู "สูตรการผลิต"'}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="bg-white/90 dark:bg-slate-800/80 rounded-xl p-3 border border-cyan-200 dark:border-cyan-500/20 flex items-center justify-between">
+                    <span className="text-xs text-gray-700 dark:text-slate-300 font-medium">ราคาต้นทุนต่อหน่วย (คำนวณจากสูตร):</span>
+                    <span className="text-lg font-black text-cyan-700 dark:text-cyan-400 font-mono">
+                      {formatCurrency(
+                        isEditingRecipeProduct
+                          ? (form.cost_price || editingRecipeInfo.unit_cost || 0)
+                          : (selectedLinkedRecipeId && recipeSummaryMap[selectedLinkedRecipeId]
+                              ? recipeSummaryMap[selectedLinkedRecipeId].unit_cost
+                              : (parseFloat(form.cost_price) || 0))
+                      )} <span className="text-xs font-normal text-gray-500 dark:text-slate-400">/ {form.unit || 'ชิ้น'}</span>
+                    </span>
+                  </div>
                   <input
-                    type="number"
-                    step="any"
-                    placeholder="เช่น 100 (หากซื้อยกแพ็ค)"
-                    value={packTotalPrice}
-                    onChange={(e) => {
-                      const pPrice = e.target.value;
-                      setPackTotalPrice(pPrice);
-                      const nWeight = parseFloat(form.net_weight) || 1;
-                      if (pPrice !== '' && nWeight > 0) {
-                        const calcCost = parseFloat(pPrice) / nWeight;
-                        setForm(f => ({ ...f, cost_price: Number(calcCost.toFixed(4)).toString() }));
-                      }
-                    }}
-                    disabled={packLocked || !!editingProduct}
-                    className={"input-field bg-white " + ((packLocked || editingProduct) ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "")}
+                    type="hidden"
+                    name="cost_price"
+                    value={
+                      isEditingRecipeProduct
+                        ? (form.cost_price || editingRecipeInfo.unit_cost || 0)
+                        : (selectedLinkedRecipeId && recipeSummaryMap[selectedLinkedRecipeId]
+                            ? recipeSummaryMap[selectedLinkedRecipeId].unit_cost
+                            : (parseFloat(form.cost_price) || 0))
+                    }
                   />
-                  <p className="text-[11px] text-gray-400 mt-1">กรอกราคารวมของทั้งถุง/แพ็ค</p>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">
-                    ราคาต้นทุนต่อหน่วย* <span className="text-xs font-semibold text-indigo-600 font-mono">(บาท / {form.unit || 'ชิ้น'})</span>
-                  </label>
-                  <div className="relative flex items-center">
-                    <input type="number" step="any" value={form.cost_price}
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50/80 dark:bg-slate-800/80 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700">
+                  <div>
+                    <label className="block text-xs sm:text-sm font-semibold text-gray-700 dark:text-slate-300 mb-1">
+                      ราคารวมยกแพ็ค (บาท) <span className="text-[11px] font-normal text-indigo-600 dark:text-indigo-400">(คำนวณให้อัตโนมัติ)</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="เช่น 100 (หากซื้อยกแพ็ค)"
+                      value={packTotalPrice}
                       onChange={(e) => {
-                        const cPrice = e.target.value;
-                        setForm(f => ({ ...f, cost_price: cPrice }));
+                        const pPrice = e.target.value;
+                        setPackTotalPrice(pPrice);
                         const nWeight = parseFloat(form.net_weight) || 1;
-                        if (cPrice !== '' && nWeight > 1) {
-                          const total = parseFloat(cPrice) * nWeight;
-                          setPackTotalPrice(Number(total.toFixed(2)).toString());
+                        if (pPrice !== '' && nWeight > 0) {
+                          const calcCost = parseFloat(pPrice) / nWeight;
+                          setForm(f => ({ ...f, cost_price: Number(calcCost.toFixed(4)).toString() }));
                         }
                       }}
                       disabled={packLocked || !!editingProduct}
-                      className={"input-field bg-white pr-14 " + ((packLocked || editingProduct) ? "bg-gray-100 text-gray-500 cursor-not-allowed opacity-100" : "")}
-                      style={(packLocked || editingProduct) ? { pointerEvents: 'none' } : {}}
-                      required={!(packLocked || editingProduct)} />
-                    <span className="absolute right-3 text-xs font-bold text-slate-400 pointer-events-none">
-                      / {form.unit || 'ชิ้น'}
-                    </span>
-                    {(packLocked || editingProduct) && (
-                      <>
-                        <input type="hidden" name="cost_price" value={form.cost_price} required />
-                        <span className="absolute right-8 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔒</span>
-                      </>
+                      className={"input-field bg-white dark:bg-slate-900 !py-2 text-sm " + ((packLocked || editingProduct) ? "bg-gray-100 dark:bg-slate-800 text-gray-400 dark:text-slate-500 cursor-not-allowed" : "")}
+                    />
+                    <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-1">กรอกราคารวมของทั้งถุง/แพ็ค</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs sm:text-sm font-semibold text-gray-700 dark:text-slate-300 mb-1">
+                      ราคาต้นทุนต่อหน่วย* <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 font-mono">(บาท / {form.unit || 'ชิ้น'})</span>
+                    </label>
+                    <div className="relative flex items-center">
+                      <input type="number" step="any" value={form.cost_price}
+                        onChange={(e) => {
+                          const cPrice = e.target.value;
+                          setForm(f => ({ ...f, cost_price: cPrice }));
+                          const nWeight = parseFloat(form.net_weight) || 1;
+                          if (cPrice !== '' && nWeight > 1) {
+                            const total = parseFloat(cPrice) * nWeight;
+                            setPackTotalPrice(Number(total.toFixed(2)).toString());
+                          }
+                        }}
+                        disabled={packLocked || !!editingProduct}
+                        className={"input-field bg-white dark:bg-slate-900 pr-14 !py-2 text-sm " + ((packLocked || editingProduct) ? "bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-500 cursor-not-allowed opacity-100" : "")}
+                        style={(packLocked || editingProduct) ? { pointerEvents: 'none' } : {}}
+                        required={!(packLocked || editingProduct)} />
+                      <span className="absolute right-3 text-xs font-bold text-slate-400 pointer-events-none">
+                        / {form.unit || 'ชิ้น'}
+                      </span>
+                      {(packLocked || editingProduct) && (
+                        <>
+                          <input type="hidden" name="cost_price" value={form.cost_price} required />
+                          <span className="absolute right-8 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔒</span>
+                        </>
+                      )}
+                    </div>
+                    {editingProduct ? (
+                      <div className="mt-1 text-xs text-gray-500 space-y-1">
+                        <p className="text-gray-400">🔒 ต้นทุนจัดซื้อควบคุมผ่านระบบสต๊อก</p>
+                        <p>
+                          ล็อกที่ <span className="font-semibold text-gray-700">{formatCurrency(editingCurrentCost)} / {form.unit || 'ชิ้น'}</span>
+                          {editingPendingCost !== null && editingStock > 0 && (
+                            <>
+                              . ต้นทุนใหม่รอดำเนินการ: <span className="text-sky-600 font-semibold">{formatCurrency(editingPendingCost)}</span> เมื่อสต๊อกเหลือ 0
+                            </>
+                          )}
+                        </p>
+                      </div>
+                    ) : (
+                      editingCostWillQueue && (
+                        <p className="mt-1 text-xs text-amber-600">ต้นทุนใหม่จะรอดำเนินการจนกว่าสต๊อกปัจจุบันจะหมด</p>
+                      )
                     )}
                   </div>
-                  {editingProduct ? (
-                    <div className="mt-1 text-xs text-gray-500 space-y-1">
-                      <p className="text-gray-400">🔒 ต้นทุนจัดซื้อควบคุมผ่านระบบสต๊อก</p>
-                      <p>
-                        ล็อกที่ <span className="font-semibold text-gray-700">{formatCurrency(editingCurrentCost)} / {form.unit || 'ชิ้น'}</span>
-                        {editingPendingCost !== null && editingStock > 0 && (
-                          <>
-                            . ต้นทุนใหม่รอดำเนินการ: <span className="text-sky-600 font-semibold">{formatCurrency(editingPendingCost)}</span> เมื่อสต๊อกเหลือ 0
-                          </>
-                        )}
-                      </p>
+
+                  {/* Banner สรุปราคาต้นทุนต่อหน่วยอัตโนมัติ */}
+                  {Boolean(form.cost_price && parseFloat(form.cost_price) > 0) && (
+                    <div className="col-span-1 sm:col-span-2 p-3 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 rounded-xl space-y-1">
+                      <div className="flex justify-between items-center text-xs text-indigo-950">
+                        <span className="font-bold">🏷️ ต้นทุนคำนวณต่อ 1 {form.unit || 'หน่วย'}:</span>
+                        <span className="text-sm font-black text-indigo-700 font-mono">
+                          {formatCurrency(form.cost_price)} / {form.unit || 'หน่วย'}
+                        </span>
+                      </div>
+                      {parseFloat(form.net_weight) > 1 && (
+                        <div className="text-[11px] text-indigo-600 font-medium text-right">
+                          (จากราคารวมยกแพ็ค {formatCurrency(packTotalPrice || (parseFloat(form.cost_price) * parseFloat(form.net_weight)))} บรรจุ {form.net_weight} {form.unit})
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    editingCostWillQueue && (
-                      <p className="mt-1 text-xs text-amber-600">ต้นทุนใหม่จะรอดำเนินการจนกว่าสต๊อกปัจจุบันจะหมด</p>
-                    )
                   )}
                 </div>
+              )}
 
-                {/* Banner สรุปราคาต้นทุนต่อหน่วยอัตโนมัติ */}
-                {Boolean(form.cost_price && parseFloat(form.cost_price) > 0) && (
-                  <div className="col-span-2 p-3 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 rounded-xl space-y-1">
-                    <div className="flex justify-between items-center text-xs text-indigo-950">
-                      <span className="font-bold">🏷️ ต้นทุนคำนวณต่อ 1 {form.unit || 'หน่วย'}:</span>
-                      <span className="text-sm font-black text-indigo-700 font-mono">
-                        {formatCurrency(form.cost_price)} / {form.unit || 'หน่วย'}
-                      </span>
-                    </div>
-                    {parseFloat(form.net_weight) > 1 && (
-                      <div className="text-[11px] text-indigo-600 font-medium text-right">
-                        (จากราคารวมยกแพ็ค {formatCurrency(packTotalPrice || (parseFloat(form.cost_price) * parseFloat(form.net_weight)))} บรรจุ {form.net_weight} {form.unit})
-                      </div>
-                    )}
-                  </div>
-                )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-1">
+                    ราคาขาย{form.is_raw_material ? ' (ไม่ต้องระบุสำหรับวัตถุดิบ)' : ' (บาท)*'}
+                  </label>
+                  <input type="number" step="any" value={form.is_raw_material ? '0' : form.selling_price}
+                    onChange={(e) => setForm(f => ({ ...f, selling_price: e.target.value }))}
+                    disabled={form.is_raw_material}
+                    className={"input-field !py-2 text-sm " + (form.is_raw_material ? "bg-gray-100 text-gray-400 cursor-not-allowed opacity-80" : "")}
+                    placeholder={form.is_raw_material ? "0 (วัตถุดิบไม่ขายหน้าร้าน)" : "ระบุราคาขาย..."}
+                    required={!form.is_raw_material} />
+                </div>
+                <div>
+                  <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-1">
+                    จุดสั่งซื้อ ({form.unit || 'หน่วย'})
+                  </label>
+                  <input type="number" step="any" min="0" value={form.reorder_level ?? ''}
+                    onChange={(e) => setForm(f => ({ ...f, reorder_level: e.target.value }))}
+                    className="input-field !py-2 text-sm"
+                    placeholder="เช่น 5" />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  ราคาขาย{form.is_raw_material ? ' (ไม่ต้องระบุสำหรับวัตถุดิบ)' : '*'}
-                </label>
-                <input type="number" step="any" value={form.is_raw_material ? '0' : form.selling_price}
-                  onChange={(e) => setForm(f => ({ ...f, selling_price: e.target.value }))}
-                  disabled={form.is_raw_material}
-                  className={"input-field " + (form.is_raw_material ? "bg-gray-100 text-gray-400 cursor-not-allowed opacity-80" : "")}
-                  required={!form.is_raw_material} />
-              </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 pt-1">
                 <input type="checkbox" checked={form.is_featured}
                   onChange={(e) => setForm(f => ({ ...f, is_featured: e.target.checked }))}
-                  id="featured" />
-                <label htmlFor="featured" className="text-sm">สินค้าแนะนำ (แสดงหน้าแรก)</label>
-              </div>
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setShowForm(false)} className="btn-ghost flex-1">ยกเลิก</button>
-                <button type="submit" className="btn-primary flex-1">
-                  {editingProduct ? 'บันทึก' : 'เพิ่มสินค้า'}
-                </button>
+                  id="featured" className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500" />
+                <label htmlFor="featured" className="text-xs sm:text-sm text-gray-700 font-medium cursor-pointer">
+                  ⭐ สินค้าแนะนำ (แสดงแท็บแรกในหน้าขาย POS)
+                </label>
               </div>
             </form>
+
+            {/* Modal Footer (Sticky at bottom) */}
+            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/90 flex gap-3 flex-shrink-0">
+              <button type="button" onClick={() => setShowForm(false)} className="btn-ghost flex-1 py-2.5 text-sm">
+                ยกเลิก
+              </button>
+              <button type="submit" form="productForm" className="btn-primary flex-1 py-2.5 text-sm">
+                {editingProduct ? 'บันทึกการแก้ไข' : 'เพิ่มสินค้า'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -28,4 +28,4 @@ binding = "R2_BUCKET"
 bucket_name = "pos"
 
 [triggers]
-crons = ["5 17 * * *"]
+crons = ["*/15 * * * *"]

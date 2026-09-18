@@ -15,6 +15,7 @@ const navItems = [
   { path: '/products', label: 'สินค้า', icon: '📦', moduleKey: 'products', roles: ['admin', 'manager'] },
   { path: '/inventory', label: 'สต๊อก', icon: '🏪', moduleKey: 'inventory', roles: ['admin', 'manager'] },
   { path: '/recipes', label: 'สูตรอาหาร/วัตถุดิบ', icon: '🧪', moduleKey: 'recipes', roles: ['admin', 'manager'] },
+  { path: '/approvals', label: 'รายการขออนุมัติ', icon: '🛡️', moduleKey: 'approvals', roles: ['admin', 'manager'] },
   { path: '/ocr', label: 'OCR ใบเสร็จ', icon: '🧾', moduleKey: 'ocr', roles: ['admin', 'manager'] },
   { path: '/customers', label: 'ลูกหนี้', icon: '📋', moduleKey: 'customers', roles: ['admin', 'manager', 'cashier'] },
   { path: '/settings', label: 'ตั้งค่า', icon: '⚙️', moduleKey: 'settings', roles: ['admin'] },
@@ -228,15 +229,15 @@ function HamburgerMenu({ navItems, user, onLogout }) {
 
       {/* Side Drawer / Overlay Menu */}
       {isOpen && (
-        <div className="fixed inset-0 z-[60] flex">
+        <div className="fixed inset-0 z-[60] flex skip-safe-area">
           {/* Backdrop */}
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsOpen(false)} />
           
           {/* Menu Panel */}
-          <div className="relative w-72 h-full bg-white shadow-2xl flex flex-col animate-slide-right">
+          <div className="relative w-72 h-full bg-white shadow-2xl flex flex-col animate-slide-right pb-[env(safe-area-inset-bottom,0px)]">
             {/* Header with User Info */}
             <div 
-              className="p-6 pb-8 text-white relative overflow-hidden pt-[calc(1.5rem+env(safe-area-inset-top))]"
+              className="p-6 pb-8 text-white relative overflow-hidden pt-[calc(1.5rem+env(safe-area-inset-top,0px))]"
               style={{ background: 'linear-gradient(135deg, #EB0000 0%, #95008A 50%, #3300FC 100%)' }}
             >
               <div className="relative z-10">
@@ -276,7 +277,7 @@ function HamburgerMenu({ navItems, user, onLogout }) {
             </nav>
 
             {/* Footer / Logout */}
-            <div className="p-4 border-t border-gray-100">
+            <div className="p-4 border-t border-gray-100 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
               <button 
                 onClick={onLogout}
                 className="w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-red-500 font-bold hover:bg-red-50 transition-all text-left"
@@ -316,13 +317,108 @@ export default function Layout() {
     return item.roles.includes(user.role);
   });
 
+  // Detect standalone PWA on mobile (Android and iOS)
+  useEffect(() => {
+    const isStandalone = 
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.matchMedia('(display-mode: fullscreen)').matches ||
+      window.navigator.standalone === true ||
+      localStorage.getItem('pwa_installed') === 'true';
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+    if (isStandalone && isMobile) {
+      document.body.classList.add('is-pwa-mobile');
+    } else {
+      document.body.classList.remove('is-pwa-mobile');
+    }
+  }, []);
+
+  const [isFullscreen, setIsFullscreen] = useState(Boolean(typeof document !== 'undefined' && (document.fullscreenElement || document.webkitFullscreenElement)));
+  const userExitedFullscreenRef = useRef(false);
+
+  // Sync fullscreen state with browser events
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const active = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      setIsFullscreen(active);
+      if (active) {
+        userExitedFullscreenRef.current = false;
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Auto-enter fullscreen on Android upon user interaction
+  useEffect(() => {
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    if (!isAndroid) return;
+
+    const requestAndroidFullscreen = () => {
+      if (userExitedFullscreenRef.current) return;
+      const isAlreadyFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      if (!isAlreadyFullscreen) {
+        const el = document.documentElement;
+        if (el.requestFullscreen) {
+          el.requestFullscreen().catch(() => {});
+        } else if (el.webkitRequestFullscreen) {
+          el.webkitRequestFullscreen();
+        }
+      }
+    };
+
+    // Auto-enter on first user gesture (touch, click, tap)
+    window.addEventListener('touchstart', requestAndroidFullscreen, { passive: true });
+    window.addEventListener('click', requestAndroidFullscreen, { passive: true });
+    window.addEventListener('pointerdown', requestAndroidFullscreen, { passive: true });
+
+    // Re-engage fullscreen when returning to app tab / window
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        requestAndroidFullscreen();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('touchstart', requestAndroidFullscreen);
+      window.removeEventListener('click', requestAndroidFullscreen);
+      window.removeEventListener('pointerdown', requestAndroidFullscreen);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
+  const toggleFullscreen = () => {
+    const isAlreadyFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+    if (!isAlreadyFullscreen) {
+      userExitedFullscreenRef.current = false;
+      const el = document.documentElement;
+      if (el.requestFullscreen) {
+        el.requestFullscreen().catch(() => {});
+      } else if (el.webkitRequestFullscreen) {
+        el.webkitRequestFullscreen();
+      }
+    } else {
+      userExitedFullscreenRef.current = true;
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      }
+    }
+  };
+
   return (
-    <div className="min-h-[100dvh] flex flex-col page-bg-gradient">
+    <div className="h-screen min-h-[100dvh] flex flex-col page-bg-gradient overflow-hidden">
       {/* Offline Top Warning Banner */}
       <OfflineTopBanner />
 
       {/* Navbar */}
-      <nav className="shadow-md px-4 py-2 flex items-center justify-between sticky top-0 z-40 min-h-[56px] h-[calc(56px+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)]"
+      <nav className="shadow-md px-4 py-2 flex items-center justify-between sticky top-0 z-40 min-h-[56px] h-[calc(56px+env(safe-area-inset-top))] pt-[max(0.5rem,env(safe-area-inset-top))] pwa-navbar-top md:h-14 md:pt-2 md:pb-2 md:!min-h-[56px]"
         style={{ background: '#EB0000', backgroundImage: 'linear-gradient(to left, #3300FC, #95008A, #EB0000)' }}>
         
         <div className="flex items-center gap-3">
@@ -341,6 +437,23 @@ export default function Layout() {
         <div className="flex items-center gap-2">
           {/* Network & System Health Status Indicator */}
           <NetworkStatusIndicator />
+
+          {/* Fullscreen Toggle (auto-triggers for Android, toggleable manually) */}
+          <button
+            onClick={toggleFullscreen}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition-all cursor-pointer active:scale-95 shadow-sm text-xs ${
+              isFullscreen
+                ? 'bg-emerald-500/30 border-emerald-400/50 text-emerald-100'
+                : 'bg-white/10 hover:bg-white/20 border-white/20 text-white'
+            }`}
+            title={isFullscreen ? "ออกจากโหมดเต็มจอ" : "เข้าสู่โหมดเต็มจอ (Fullscreen)"}
+            aria-label="Toggle Fullscreen"
+          >
+            <span className="text-sm">{isFullscreen ? '🗗' : '⛶'}</span>
+            <span className="hidden lg:inline font-semibold select-none">
+              {isFullscreen ? 'ย่อจอ' : 'เต็มจอ'}
+            </span>
+          </button>
 
           {/* Dark / Light Theme Toggle Button */}
           <button
@@ -362,7 +475,7 @@ export default function Layout() {
         </div>
       </nav>
 
-      <main className="flex-1 overflow-hidden relative">
+      <main className="flex-1 flex flex-col min-h-0 overflow-y-auto relative">
         <Outlet />
       </main>
     </div>

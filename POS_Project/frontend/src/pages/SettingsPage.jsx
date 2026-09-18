@@ -5,6 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { canViewModule, canMaintainModule } from '../utils/permissions';
 import Pagination from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
+import LineSettingsTab from '../components/LineSettingsTab';
+import DeviceSecurityTab from '../components/DeviceSecurityTab';
 
 const ROLE_LABELS = { admin: 'แอดมิน', manager: 'ผู้จัดการ', cashier: 'แคชเชียร์' };
 
@@ -273,6 +275,10 @@ function UserModal({ user, roles, onClose, onSaved }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (form.pin_code && form.pin_code.length !== 6) {
+      toast.error('กรุณาระบุ PIN Code ให้ครบ 6 หลัก');
+      return;
+    }
     setSaving(true);
     try {
       if (isEdit) {
@@ -310,12 +316,12 @@ function UserModal({ user, roles, onClose, onSaved }) {
             <input type="password" required={!isEdit} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} className="input-field" placeholder="รหัสผ่าน" />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-3 text-gray-700 flex items-center gap-2">
-              <span>🔐 PIN Code (4 หลัก)</span>
-              <span className="text-red-500">*</span>
+            <label className="block text-sm font-medium mb-1 text-gray-700 flex items-center justify-between">
+              <span>🔐 PIN Code (6 หลัก)</span>
+              <span className="text-[11px] text-purple-600 font-semibold">ห้ามซ้ำกับผู้ใช้อื่น</span>
             </label>
-            <div className="flex justify-center gap-4 py-2">
-              {[0, 1, 2, 3].map(i => (
+            <div className="flex justify-center gap-2 sm:gap-2.5 py-2">
+              {[0, 1, 2, 3, 4, 5].map(i => (
                 <input
                   key={i}
                   type="password"
@@ -331,11 +337,11 @@ function UserModal({ user, roles, onClose, onSaved }) {
                   onChange={e => {
                     const val = e.target.value.replace(/\D/g, '').slice(-1);
                     const pinArr = (form.pin_code || '').split('');
-                    while(pinArr.length < 4) pinArr.push('');
+                    while(pinArr.length < 6) pinArr.push('');
                     pinArr[i] = val;
-                    const finalPin = pinArr.join('').slice(0, 4);
+                    const finalPin = pinArr.join('').slice(0, 6);
                     setForm({ ...form, pin_code: finalPin });
-                    if (val && i < 3) {
+                    if (val && i < 5) {
                       const next = e.target.parentNode.children[i + 1];
                       if (next) next.focus();
                     }
@@ -346,7 +352,7 @@ function UserModal({ user, roles, onClose, onSaved }) {
                       if (prev) prev.focus();
                     }
                   }}
-                  className="w-14 h-16 text-center text-3xl font-bold border border-purple-100 rounded-2xl transition-all outline-none bg-white focus:border-purple-500 focus:ring-4 focus:ring-purple-500/10 text-purple-700 shadow-sm hover:border-purple-200"
+                  className="w-10 h-13 sm:w-12 sm:h-15 text-center text-2xl font-bold border border-purple-100 rounded-xl transition-all outline-none bg-white focus:border-purple-500 focus:ring-4 focus:ring-purple-500/10 text-purple-700 shadow-sm hover:border-purple-200"
                   placeholder="-"
                   required
                 />
@@ -864,7 +870,8 @@ function AssignmentModal({ user, stores, onClose }) {
 }
 
 export default function SettingsPage() {
-  const { refreshStores, refreshActiveStore } = useAuth();
+  const { user, refreshStores, refreshActiveStore } = useAuth();
+  const canMaintain = canMaintainModule(user, 'settings');
   const [activeTab, setActiveTab] = useState('stores_users'); // 'stores_users' | 'categories' | 'units'
   const [storeList, setStoreList] = useState([]);
   const [users, setUsers] = useState([]);
@@ -931,6 +938,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteUser = async (user) => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์ลบผู้ใช้งาน');
     try {
       await api.delete(`/users/${user.id}`);
       toast.success('ลบผู้ใช้งานสำเร็จ');
@@ -942,6 +950,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteStore = async (store, force = false) => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์ลบสาขา');
     const confirmMsg = force 
       ? `⚠️ ยืนยันการลบแบบถาวร!\nการลบสาขา "${store.name}" จะทำให้ข้อมูลสินค้า ยอดขาย และประวัติทั้งหมดของสาขานี้ถูกลบออกถาวรและไม่สามารถกู้คืนได้\n\nคุณแน่ใจหรือไม่?`
       : `คุณต้องการลบสาขา "${store.name}" ใช่หรือไม่?\nคำเตือน: การลบจะลบสิทธิ์การเข้าถึงของผู้ใช้ทุกคนในสาขานี้ด้วย`;
@@ -965,6 +974,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteCategory = async (cat) => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์ลบหมวดหมู่');
     try {
       await api.delete(`/categories/${cat.id}`);
       toast.success(`ลบหมวดหมู่ "${cat.name}" สำเร็จ`);
@@ -976,6 +986,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteUnit = (unitToDelete) => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์ลบหน่วยนับ');
     if (!window.confirm(`คุณต้องการลบหน่วยนับ "${unitToDelete.label || unitToDelete.value}" ใช่หรือไม่?`)) return;
     try {
       const updated = customUnits.filter(u => u.value !== unitToDelete.value);
@@ -988,6 +999,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteRole = async (role) => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์ลบบทบาท');
     try {
       await api.delete(`/users/roles/${role.id}`);
       toast.success(`ลบบทบาท "${role.name}" สำเร็จ`);
@@ -1003,7 +1015,7 @@ export default function SettingsPage() {
   const catsPaging = usePagination(categories, 10, activeTab);
 
   return (
-    <div className="p-3 sm:p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)] pb-16">
+    <div className="p-3 sm:p-4 md:p-6 overflow-y-auto h-[calc(100vh-56px)] pb-24 sm:pb-16">
       {/* Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 sm:mb-6">
         <div>
@@ -1011,6 +1023,14 @@ export default function SettingsPage() {
           <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">จัดการข้อมูลสาขา ผู้ใช้งาน หมวดหมู่สินค้า และหน่วยนับสินค้า</p>
         </div>
       </div>
+
+      {/* Read-Only Notice Banner */}
+      {!canMaintain && (
+        <div className="mb-4 p-3.5 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800/80 rounded-2xl flex items-center gap-3 text-xs text-amber-800 dark:text-amber-200 font-bold animate-fade-in shadow-xs">
+          <span className="text-xl">👁️</span>
+          <span>โหมดดูข้อมูลเท่านั้น (View Only): คุณไม่มีสิทธิ์แก้ไข สร้าง หรือลบการตั้งค่าระบบและสาขา</span>
+        </div>
+      )}
 
       {/* Tabs - Mobile PWA Optimized */}
       <div className="grid grid-cols-2 sm:flex sm:overflow-x-auto gap-2 bg-white dark:bg-slate-900 p-1.5 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-800 mb-6 scrollbar-none">
@@ -1054,6 +1074,28 @@ export default function SettingsPage() {
         >
           <span>📏</span> <span>หน่วยนับสินค้า</span> <span className="text-[10px] sm:text-xs opacity-80">({SYSTEM_UNITS.length + customUnits.length})</span>
         </button>
+        <button
+          onClick={() => setActiveTab('line')}
+          className={`py-2.5 sm:py-3 px-3 sm:px-5 text-xs sm:text-sm font-bold rounded-xl transition-all flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+            activeTab === 'line'
+              ? 'bg-emerald-600 text-white shadow-md'
+              : 'text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <span>💬</span> <span>LINE Integration</span>
+        </button>
+        {user?.role === 'admin' && (
+          <button
+            onClick={() => setActiveTab('security')}
+            className={`py-2.5 sm:py-3 px-3 sm:px-5 text-xs sm:text-sm font-bold rounded-xl transition-all flex items-center justify-center sm:justify-start gap-1.5 sm:gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
+              activeTab === 'security'
+                ? 'bg-rose-600 text-white shadow-md'
+                : 'text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <span>🔒</span> <span>ความปลอดภัย & อุปกรณ์</span>
+          </button>
+        )}
       </div>
 
       {/* TAB 1: Stores & Users */}
@@ -1067,9 +1109,11 @@ export default function SettingsPage() {
                   <h3 className="font-semibold text-lg">🏢 จัดการสาขา</h3>
                   <p className="text-xs text-gray-400">สร้างและตั้งค่าข้อมูลสาขาขาย</p>
                 </div>
-                <button onClick={() => setStoreModal('new')} className="btn-primary !py-2 !px-4 text-sm">
-                  + เพิ่มสาขา
-                </button>
+                {canMaintain && (
+                  <button onClick={() => setStoreModal('new')} className="btn-primary !py-2 !px-4 text-sm">
+                    + เพิ่มสาขา
+                  </button>
+                )}
               </div>
               <div className="space-y-2">
                 {storeList.map(s => (
@@ -1079,12 +1123,14 @@ export default function SettingsPage() {
                       <p className="font-bold text-gray-800 truncate">{s.name}</p>
                       <p className="text-xs text-gray-500 truncate">{s.phone || 'ไม่มีเบอร์โทร'} · VAT {s.vat_rate}%</p>
                     </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => setStoreModal(s)} className="text-sm text-blue-600 hover:underline px-1 font-medium">แก้ไข</button>
-                      {storeList.length > 1 && (
-                        <button onClick={() => handleDeleteStore(s)} className="text-sm text-red-500 hover:underline px-1 font-medium">ลบ</button>
-                      )}
-                    </div>
+                    {canMaintain && (
+                      <div className="flex gap-2">
+                        <button onClick={() => setStoreModal(s)} className="text-sm text-blue-600 hover:underline px-1 font-medium">แก้ไข</button>
+                        {storeList.length > 1 && (
+                          <button onClick={() => handleDeleteStore(s)} className="text-sm text-red-500 hover:underline px-1 font-medium">ลบ</button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
                 {storeList.length === 0 && <p className="text-center py-10 text-gray-400">ยังไม่มีข้อมูลสาขา</p>}
@@ -1100,9 +1146,11 @@ export default function SettingsPage() {
                   <h3 className="font-semibold text-lg">👥 จัดการผู้ใช้งาน</h3>
                   <p className="text-xs text-gray-400">จัดการบัญชีและสิทธิ์การเข้าถึงของผู้ใช้</p>
                 </div>
-                <button onClick={() => setUserModal('new')} className="btn-primary !py-2 !px-4 text-sm">
-                  + เพิ่มผู้ใช้
-                </button>
+                {canMaintain && (
+                  <button onClick={() => setUserModal('new')} className="btn-primary !py-2 !px-4 text-sm">
+                    + เพิ่มผู้ใช้
+                  </button>
+                )}
               </div>
               <div className="space-y-2">
                 {usersPaging.paged.map((u) => (
@@ -1114,11 +1162,13 @@ export default function SettingsPage() {
                       <p className="text-sm font-semibold text-gray-800 truncate">{u.full_name}</p>
                       <p className="text-xs text-gray-500 truncate">@{u.username} · {ROLE_LABELS[u.role_name] || u.role_name} · 🔑 ****</p>
                     </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <button onClick={() => setAssignModal(u)} className="text-[10px] bg-purple-50 text-purple-600 px-2 py-1 rounded-lg border border-purple-100 font-bold hover:bg-purple-100" title="กำหนดสาขา">🔑 สิทธิ์สาขา</button>
-                      <button onClick={() => setUserModal(u)} className="text-xs text-blue-600 hover:underline px-1 py-1">แก้ไข</button>
-                      <button onClick={() => setDeleteConfirm(u)} className="text-xs text-red-500 hover:underline px-1 py-1">ลบ</button>
-                    </div>
+                    {canMaintain && (
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button onClick={() => setAssignModal(u)} className="text-[10px] bg-purple-50 text-purple-600 px-2 py-1 rounded-lg border border-purple-100 font-bold hover:bg-purple-100" title="กำหนดสาขา">🔑 สิทธิ์สาขา</button>
+                        <button onClick={() => setUserModal(u)} className="text-xs text-blue-600 hover:underline px-1 py-1">แก้ไข</button>
+                        <button onClick={() => setDeleteConfirm(u)} className="text-xs text-red-500 hover:underline px-1 py-1">ลบ</button>
+                      </div>
+                    )}
                   </div>
                 ))}
                 {users.length === 0 && <p className="text-sm text-gray-400 text-center py-8">ไม่พบผู้ใช้งาน</p>}
@@ -1151,13 +1201,15 @@ export default function SettingsPage() {
                   สร้างและกำหนดสิทธิ์การเข้าถึงเมนูต่างๆ ของแต่ละประเภทบัญชีผู้ใช้
                 </p>
               </div>
-              <button
-                onClick={() => setRoleModal('new')}
-                className="btn-primary !py-2.5 !px-4 text-sm shadow-md flex items-center gap-1.5"
-              >
-                <span>➕</span>
-                <span>เพิ่มบทบาทใหม่</span>
-              </button>
+              {canMaintain && (
+                <button
+                  onClick={() => setRoleModal('new')}
+                  className="btn-primary !py-2.5 !px-4 text-sm shadow-md flex items-center gap-1.5"
+                >
+                  <span>➕</span>
+                  <span>เพิ่มบทบาทใหม่</span>
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1231,22 +1283,24 @@ export default function SettingsPage() {
                     </div>
 
                     {/* Action buttons */}
-                    <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 dark:border-slate-700/80">
-                      <button
-                        onClick={() => setRoleModal(r)}
-                        className="px-3 py-1.5 bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-200 hover:bg-blue-200 dark:hover:bg-blue-900 rounded-xl text-xs font-bold border border-blue-200 dark:border-blue-800 transition-all flex items-center gap-1 cursor-pointer"
-                      >
-                        ✏️ แก้ไขสิทธิ์
-                      </button>
-                      {r.name !== 'admin' && (
+                    {canMaintain && (
+                      <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 dark:border-slate-700/80">
                         <button
-                          onClick={() => setDeleteRoleConfirm(r)}
-                          className="px-3 py-1.5 bg-red-100 dark:bg-red-950/80 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900 rounded-xl text-xs font-bold border border-red-200 dark:border-red-800 transition-all flex items-center gap-1 cursor-pointer"
+                          onClick={() => setRoleModal(r)}
+                          className="px-3 py-1.5 bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-200 hover:bg-blue-200 dark:hover:bg-blue-900 rounded-xl text-xs font-bold border border-blue-200 dark:border-blue-800 transition-all flex items-center gap-1 cursor-pointer"
                         >
-                          🗑️ ลบ
+                          ✏️ แก้ไขสิทธิ์
                         </button>
-                      )}
-                    </div>
+                        {r.name !== 'admin' && (
+                          <button
+                            onClick={() => setDeleteRoleConfirm(r)}
+                            className="px-3 py-1.5 bg-red-100 dark:bg-red-950/80 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900 rounded-xl text-xs font-bold border border-red-200 dark:border-red-800 transition-all flex items-center gap-1 cursor-pointer"
+                          >
+                            🗑️ ลบ
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1268,12 +1322,14 @@ export default function SettingsPage() {
                   สร้าง แก้ไข และเรียงลำดับหมวดหมู่สินค้าในระบบขาย POS
                 </p>
               </div>
-              <button
-                onClick={() => setCategoryModal('new')}
-                className="btn-primary !py-2.5 !px-4 text-sm shadow-md"
-              >
-                + เพิ่มหมวดหมู่ใหม่
-              </button>
+              {canMaintain && (
+                <button
+                  onClick={() => setCategoryModal('new')}
+                  className="btn-primary !py-2.5 !px-4 text-sm shadow-md"
+                >
+                  + เพิ่มหมวดหมู่ใหม่
+                </button>
+              )}
             </div>
 
             <div className="overflow-x-auto">
@@ -1284,7 +1340,7 @@ export default function SettingsPage() {
                     <th className="py-3 px-4">รายละเอียด</th>
                     <th className="py-3 px-4 text-center">สินค้าในหมวด</th>
                     <th className="py-3 px-4 text-center">ลำดับแสดง</th>
-                    <th className="py-3 px-4 text-right">จัดการ</th>
+                    {canMaintain && <th className="py-3 px-4 text-right">จัดการ</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-sm">
@@ -1328,25 +1384,27 @@ export default function SettingsPage() {
                       <td className="py-3.5 px-4 text-center font-mono text-xs font-semibold text-gray-600 dark:text-slate-400">
                         {cat.sort_order ?? 0}
                       </td>
-                      <td className="py-3.5 px-4 text-right space-x-2" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => setCategoryModal(cat)}
-                          className="px-3 py-1 bg-blue-50 dark:bg-blue-950/80 text-blue-600 dark:text-blue-300 hover:bg-blue-100 rounded-lg text-xs font-bold transition-all cursor-pointer"
-                        >
-                          ✏️ แก้ไข
-                        </button>
-                        <button
-                          onClick={() => setDeleteCategoryConfirm(cat)}
-                          className="px-3 py-1 bg-red-50 dark:bg-red-950/80 text-red-600 dark:text-red-300 hover:bg-red-100 rounded-lg text-xs font-bold transition-all cursor-pointer"
-                        >
-                          🗑️ ลบ
-                        </button>
-                      </td>
+                      {canMaintain && (
+                        <td className="py-3.5 px-4 text-right space-x-2" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => setCategoryModal(cat)}
+                            className="px-3 py-1 bg-blue-50 dark:bg-blue-950/80 text-blue-600 dark:text-blue-300 hover:bg-blue-100 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                          >
+                            ✏️ แก้ไข
+                          </button>
+                          <button
+                            onClick={() => setDeleteCategoryConfirm(cat)}
+                            className="px-3 py-1 bg-red-50 dark:bg-red-950/80 text-red-600 dark:text-red-300 hover:bg-red-100 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                          >
+                            🗑️ ลบ
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                   {categories.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="py-12 text-center text-gray-400">
+                      <td colSpan={canMaintain ? 5 : 4} className="py-12 text-center text-gray-400">
                         ยังไม่มีหมวดหมู่สินค้าในระบบ กด "+ เพิ่มหมวดหมู่ใหม่" เพื่อสร้าง
                       </td>
                     </tr>
@@ -1381,12 +1439,14 @@ export default function SettingsPage() {
                   จัดการหน่วยนับมาตรฐานของระบบPOS และเพิ่มหน่วยนับย่อยเพิ่มเติมตามต้องการ
                 </p>
               </div>
-              <button
-                onClick={() => setUnitModal('new')}
-                className="btn-primary !py-2.5 !px-4 text-sm shadow-md"
-              >
-                + เพิ่มหน่วยนับใหม่
-              </button>
+              {canMaintain && (
+                <button
+                  onClick={() => setUnitModal('new')}
+                  className="btn-primary !py-2.5 !px-4 text-sm shadow-md"
+                >
+                  + เพิ่มหน่วยนับใหม่
+                </button>
+              )}
             </div>
 
             {/* Custom Units Section */}
@@ -1404,12 +1464,14 @@ export default function SettingsPage() {
                 <div className="p-8 border border-dashed border-gray-200 rounded-2xl text-center text-gray-400 bg-gray-50/50">
                   <p className="text-2xl mb-1">📏</p>
                   <p className="text-xs">ยังไม่มีหน่วยนับเพิ่มเติมที่กำหนดเอง</p>
-                  <button
-                    onClick={() => setUnitModal('new')}
-                    className="mt-3 text-xs font-bold text-indigo-600 hover:underline"
-                  >
-                    + คลิกที่นี่เพื่อเพิ่มหน่วยนับใหม่ (เช่น ถัง, ปอนด์, ถาด, cc)
-                  </button>
+                  {canMaintain && (
+                    <button
+                      onClick={() => setUnitModal('new')}
+                      className="mt-3 text-xs font-bold text-indigo-600 hover:underline"
+                    >
+                      + คลิกที่นี่เพื่อเพิ่มหน่วยนับใหม่ (เช่น ถัง, ปอนด์, ถาด, cc)
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -1419,22 +1481,24 @@ export default function SettingsPage() {
                         <p className="font-bold text-sm text-gray-800">{u.label || u.value}</p>
                         <p className="text-[11px] text-gray-400 font-mono">value: {u.value}</p>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => setUnitModal({ oldValue: u.value, name: u.name || u.value, symbol: u.symbol || '' })}
-                          className="p-1.5 text-xs text-blue-600 hover:bg-blue-50 rounded-lg"
-                          title="แก้ไข"
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          onClick={() => handleDeleteUnit(u)}
-                          className="p-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg"
-                          title="ลบ"
-                        >
-                          🗑️
-                        </button>
-                      </div>
+                      {canMaintain && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setUnitModal({ oldValue: u.value, name: u.name || u.value, symbol: u.symbol || '' })}
+                            className="p-1.5 text-xs text-blue-600 hover:bg-blue-50 rounded-lg"
+                            title="แก้ไข"
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            onClick={() => handleDeleteUnit(u)}
+                            className="p-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg"
+                            title="ลบ"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1467,6 +1531,16 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* TAB 5: LINE Integration */}
+      {activeTab === 'line' && (
+        <LineSettingsTab canMaintain={canMaintain} />
+      )}
+
+      {/* TAB 6: Device Security & Whitelist (Admin Only) */}
+      {activeTab === 'security' && user?.role === 'admin' && (
+        <DeviceSecurityTab canMaintain={canMaintain} />
       )}
 
       {/* MODALS */}

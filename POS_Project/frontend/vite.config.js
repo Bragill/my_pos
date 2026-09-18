@@ -8,9 +8,6 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5174,
     https: true,
-    hmr: {
-      host: 'localhost',
-    },
     proxy: { 
       '/api': {
         target: 'https://pos-backend.bragill2012.workers.dev',
@@ -31,6 +28,7 @@ export default defineConfig({
       manifest: false,
       includeAssets: ['favicon.ico', 'icons/*.png'],
       workbox: { 
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         skipWaiting: true,
         clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],

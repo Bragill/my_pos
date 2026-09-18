@@ -7,8 +7,50 @@ body {
   background: #f5f0ff;
   color: #1e293b;
   min-height: 100dvh;
+  min-height: -webkit-fill-available;
   color-scheme: light;
   transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+html {
+  height: -webkit-fill-available;
+}
+
+/* Modal and bottom sheet safe-area support on mobile */
+@media (max-width: 767px) {
+  .modal-safe-area {
+    padding-top: max(1rem, env(safe-area-inset-top, 0px));
+    padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+    padding-left: max(1rem, env(safe-area-inset-left, 0px));
+    padding-right: max(1rem, env(safe-area-inset-right, 0px));
+  }
+
+  .bottom-sheet-safe-area {
+    padding-bottom: max(1rem, calc(0.75rem + env(safe-area-inset-bottom, 0px)));
+  }
+
+  /* PWA Standalone Top Spacing for Mobile (Android & iPhone 13+) */
+  @media (display-mode: standalone), (display-mode: fullscreen) {
+    .pwa-navbar-top {
+      padding-top: max(1.75rem, calc(env(safe-area-inset-top, 0px) + 0.5rem)) !important;
+      min-height: calc(56px + max(1.75rem, calc(env(safe-area-inset-top, 0px) + 0.5rem))) !important;
+      height: auto !important;
+    }
+    .pwa-network-popup {
+      top: calc(56px + max(1.75rem, calc(env(safe-area-inset-top, 0px) + 0.5rem)) + 8px) !important;
+    }
+  }
+}
+
+/* Fallback for iOS Standalone PWA navigator */
+body.is-pwa-mobile .pwa-navbar-top {
+  padding-top: max(1.75rem, calc(env(safe-area-inset-top, 0px) + 0.5rem)) !important;
+  min-height: calc(56px + max(1.75rem, calc(env(safe-area-inset-top, 0px) + 0.5rem))) !important;
+  height: auto !important;
+}
+
+body.is-pwa-mobile .pwa-network-popup {
+  top: calc(56px + max(1.75rem, calc(env(safe-area-inset-top, 0px) + 0.5rem)) + 8px) !important;
 }
 
 html.dark body {
@@ -35,6 +77,15 @@ html.dark .page-bg-gradient {
   }
   .animate-fade-in {
     animation: fade-in 0.3s ease-out;
+  }
+  .no-scrollbar::-webkit-scrollbar,
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar,
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 }
 
@@ -166,10 +217,20 @@ html.dark .bg-white {
 
 html.dark [class*="bg-slate-50"],
 html.dark [class*="bg-gray-50"],
+html.dark [class*="bg-slate-100"],
+html.dark [class*="bg-gray-100"],
 html.dark [class*="bg-indigo-50"],
 html.dark [class*="bg-blue-50"] {
   background-color: rgba(15, 23, 42, 0.75) !important;
   color: #f1f5f9 !important;
+}
+
+html.dark thead,
+html.dark thead tr,
+html.dark thead th {
+  background-color: #1e293b !important;
+  color: #cbd5e1 !important;
+  border-color: #334155 !important;
 }
 
 html.dark .bg-gradient-to-r.from-indigo-50.to-blue-50,
@@ -243,21 +304,69 @@ html.dark select option {
   color: #f1f5f9;
 }
 
-/* ── Dashboard stat tones: vivid on light, brightened on dark ── */
-.stat-value { color: var(--sc); }
-html.dark .stat-value { color: var(--sc-dark, var(--sc)); }
+/* ── Quick Filter Date Preset Buttons ── */
+.date-preset-btn {
+  @apply flex-1 px-2.5 py-2 rounded-xl text-[11px] font-bold transition-all text-center whitespace-nowrap border shadow-sm;
+  background-color: #f1f5f9;
+  color: #475569;
+  border-color: #cbd5e1;
+}
+.date-preset-btn:hover {
+  background-color: #e2e8f0;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+.date-preset-btn.active {
+  background-color: #4f46e5 !important;
+  color: #ffffff !important;
+  border-color: #6366f1 !important;
+  box-shadow: 0 1px 4px 0 rgba(79, 70, 229, 0.35) !important;
+}
 
-.t-revenue { color: #3300FC; }
-html.dark .t-revenue { color: #818CF8; }
+html.dark .date-preset-btn {
+  background-color: #1e293b !important;
+  color: #94a3b8 !important;
+  border-color: #334155 !important;
+}
+html.dark .date-preset-btn:hover {
+  background-color: #334155 !important;
+  color: #f8fafc !important;
+  border-color: #475569 !important;
+}
+html.dark .date-preset-btn.active {
+  background-color: #4f46e5 !important;
+  color: #ffffff !important;
+  border-color: #6366f1 !important;
+  box-shadow: 0 2px 8px 0 rgba(99, 102, 241, 0.45) !important;
+}
 
-.t-cost { color: #95008A; }
-html.dark .t-cost { color: #E879F9; }
+/* ── PWA Safe Area Support for Android & iOS (Mobile Only) ── */
+@media (max-width: 767px) {
+  .safe-top {
+    padding-top: max(12px, env(safe-area-inset-top, 0px));
+  }
 
-.t-profit { color: #16a34a; }
-html.dark .t-profit { color: #4ADE80; }
+  .safe-bottom {
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  }
 
-.t-loss { color: #EB0000; }
-html.dark .t-loss { color: #F87171; }
+  .safe-area-inset {
+    padding-top: max(12px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+  }
 
-.t-muted { color: #6b7280; }
-html.dark .t-muted { color: #CBD5E1; }
+  /* Automatically pad all full-screen fixed modal backdrops and drawers on mobile only */
+  .fixed.inset-0:not(.skip-safe-area) {
+    padding-top: max(1rem, env(safe-area-inset-top, 0px));
+    padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+    padding-left: max(1rem, env(safe-area-inset-left, 0px));
+    padding-right: max(1rem, env(safe-area-inset-right, 0px));
+  }
+
+  .fixed.inset-0.items-end {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px)) !important;
+  }
+}
+

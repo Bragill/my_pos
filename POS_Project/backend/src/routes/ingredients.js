@@ -36,9 +36,11 @@ async function syncRawMaterialProductsToIngredients(storeId) {
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
        LEFT JOIN inventory i ON p.id = i.product_id
-       WHERE p.is_active = 1 
-         AND (p.store_id = ? OR p.store_id IS NULL OR p.store_id = '')
-         AND (p.is_raw_material = 1 OR c.is_raw_material = 1 OR c.name = 'วัตถุดิบ' OR c.name LIKE '%วัตถุดิบ%')`,
+        WHERE p.is_active = 1 
+          AND (p.store_id = ? OR p.store_id IS NULL OR p.store_id = '')
+          AND (p.is_raw_material = 1 OR c.is_raw_material = 1 OR c.name = 'วัตถุดิบ' OR c.name LIKE '%วัตถุดิบ%')
+          AND (p.selling_price IS NULL OR p.selling_price <= 0)
+          AND (p.sku NOT LIKE 'REC%')`,
       [storeId]
     );
 
@@ -103,10 +105,10 @@ async function syncRawMaterialProductsToIngredients(storeId) {
           [ing.id, storeId, ing.quantity || 0, ing.reorder_level || 5]
         );
         syncedCount++;
-      } else if (existingProd.is_active === 0 || existingProd.is_raw_material === 0) {
+      } else if (existingProd.is_active === 0) {
         await db.run(
-          `UPDATE products SET is_active = 1, is_raw_material = 1, cost_price = ?, unit = ?, category_id = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?`,
-          [ing.cost_per_unit || 0, ing.unit || 'g', rawCategory.id, existingProd.id]
+          `UPDATE products SET is_active = 1, updated_at = datetime('now', '+7 hours') WHERE id = ?`,
+          [existingProd.id]
         );
         syncedCount++;
       }
@@ -208,8 +210,8 @@ router.post("/", authenticate, authorize("admin", "manager"), async (req, res, n
     // Initial stock transaction log if quantity > 0
     if (qty > 0) {
       await db.run(
-        `INSERT INTO ingredient_stock_transactions (id, ingredient_id, user_id, store_id, type, quantity, remark)
-         VALUES (?, ?, ?, ?, 'receive', ?, 'ยอดยกมา / Initial Stock')`,
+        `INSERT INTO ingredient_stock_transactions (id, ingredient_id, user_id, store_id, type, quantity, remark, created_at)
+         VALUES (?, ?, ?, ?, 'receive', ?, 'ยอดยกมา / Initial Stock', datetime('now', '+7 hours'))`,
         [uuidv4(), id, req.user.id, req.store_id, qty]
       );
     }
@@ -284,7 +286,7 @@ router.put("/:id", authenticate, authorize("admin", "manager"), async (req, res,
 // POST adjust ingredient stock
 router.post("/:id/adjust", authenticate, authorize("admin", "manager"), async (req, res, next) => {
   try {
-    const { change, type = "adjustment", remark } = req.body;
+    const { change, type = "adjust", remark } = req.body;
     if (change === undefined || change === 0) {
       return next(new AppError("กรุณาระบุจำนวนที่ต้องการปรับปรุง", 400));
     }
@@ -295,6 +297,14 @@ router.post("/:id/adjust", authenticate, authorize("admin", "manager"), async (r
     );
 
     if (!existing) return next(new AppError("ไม่พบข้อมูลวัตถุดิบ", 404));
+
+    const pendingApproval = await db.get(
+      "SELECT document_id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = ? AND status = 'PENDING' AND (payload LIKE ? OR document_id = ?)",
+      [req.store_id, `%"product_id":"${req.params.id}"%`, req.params.id]
+    );
+    if (pendingApproval) {
+      return next(new AppError(`วัตถุดิบนี้มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE (#${pendingApproval.document_id}) ไม่สามารถปรับสต็อกได้จนกว่าจะได้รับอนุมัติ`, 400));
+    }
 
     const newQuantity = existing.quantity + change;
 
@@ -309,8 +319,8 @@ router.post("/:id/adjust", authenticate, authorize("admin", "manager"), async (r
     );
 
     await db.run(
-      `INSERT INTO ingredient_stock_transactions (id, ingredient_id, user_id, store_id, type, quantity, remark)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO ingredient_stock_transactions (id, ingredient_id, user_id, store_id, type, quantity, remark, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '+7 hours'))`,
       [uuidv4(), req.params.id, req.user.id, req.store_id, type, change, remark || "ปรับปรุงสต็อกวัตถุดิบ"]
     );
 

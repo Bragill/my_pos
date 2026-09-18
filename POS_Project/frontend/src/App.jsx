@@ -14,6 +14,7 @@ import CustomersPage from "./pages/CustomersPage";
 import SettingsPage from './pages/SettingsPage';
 import OcrPage from './pages/OcrPage';
 import RecipesPage from './pages/RecipesPage';
+import ApprovalsPage from './pages/ApprovalsPage';
 import Layout from './components/Layout';
 import InstallPWA from './components/InstallPWA';
 import { canViewModule } from './utils/permissions';
@@ -55,6 +56,9 @@ function App() {
                   } />
                   <Route path="recipes" element={
                     <ProtectedRoute moduleKey="recipes" roles={['admin', 'manager']}><RecipesPage /></ProtectedRoute>
+                  } />
+                  <Route path="approvals" element={
+                    <ProtectedRoute moduleKey="approvals" roles={['admin', 'manager']}><ApprovalsPage /></ProtectedRoute>
                   } />
                   <Route path="sales" element={
                     <ProtectedRoute moduleKey="sales" roles={['admin', 'manager', 'cashier']}><SalesHistoryPage /></ProtectedRoute>

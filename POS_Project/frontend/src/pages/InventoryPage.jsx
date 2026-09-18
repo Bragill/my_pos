@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { formatCurrency, formatQty } from "../utils/format";
 import { compressImage, formatBytes } from "../utils/imageCompressor";
 import api from "../services/api";
@@ -9,10 +9,27 @@ import ScanIcon from "../components/ScanIcon";
 import BatchReceiveModal from "../components/BatchReceiveModal";
 import Pagination from "../components/Pagination";
 import { usePagination } from "../hooks/usePagination";
+import { useAuth } from "../contexts/AuthContext";
+import { canMaintainModule } from "../utils/permissions";
 
 const GRAD = "linear-gradient(to left,#3300FC,#95008A,#EB0000)";
 
-const today = () => new Date().toISOString().slice(0, 10);
+const getTodayDate = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getFirstDayOfMonth = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}-01`;
+};
+
+const today = getTodayDate;
 
 const THAI_BANKS = [
   "กสิกรไทย (KBank)",
@@ -139,6 +156,9 @@ function PackCalculator({ onApply, onUnlock }) {
 }
 
 export default function InventoryPage() {
+  const { user } = useAuth();
+  const canMaintain = canMaintainModule(user, 'inventory');
+
   const [inventory, setInventory] = useState([]);
   const [categories, setCategories] = useState([]);
   const [showLowStock, setShowLowStock] = useState(false);
@@ -201,17 +221,24 @@ export default function InventoryPage() {
   const [movementsLoading, setMovementsLoading] = useState(false);
   const [movementsSearch, setMovementsSearch] = useState('');
   const [movementsType, setMovementsType] = useState('all');
+  const [movementsStartDate, setMovementsStartDate] = useState(getFirstDayOfMonth);
+  const [movementsEndDate, setMovementsEndDate] = useState(getTodayDate);
 
   const fetchMovements = useCallback(async (paramsObj = {}) => {
     setMovementsLoading(true);
     try {
       const searchVal = paramsObj.search !== undefined ? paramsObj.search : movementsSearch;
       const typeVal = paramsObj.type !== undefined ? paramsObj.type : movementsType;
+      const startVal = paramsObj.startDate !== undefined ? paramsObj.startDate : movementsStartDate;
+      const endVal = paramsObj.endDate !== undefined ? paramsObj.endDate : movementsEndDate;
 
       const res = await api.get('/inventory/movements', {
         params: {
           search: searchVal,
-          type: typeVal
+          type: typeVal,
+          startDate: startVal,
+          endDate: endVal,
+          _t: Date.now()
         }
       });
       setMovementsData(res.data.data || []);
@@ -221,27 +248,92 @@ export default function InventoryPage() {
     } finally {
       setMovementsLoading(false);
     }
-  }, [movementsSearch, movementsType]);
+  }, [movementsSearch, movementsType, movementsStartDate, movementsEndDate]);
 
   const handleOpenMovementsModal = () => {
     isProcessingRef.current = true;
     setShowMovementsModal(true);
-    fetchMovements();
+    fetchMovements({
+      startDate: movementsStartDate,
+      endDate: movementsEndDate
+    });
   };
 
   const isProcessingRef = useRef(false);
 
-  useEffect(() => { 
-    loadInventory(); 
-    loadCategories();
-  }, [showLowStock]);
+  // Active approval polling tracker
+  const activePollIntervalsRef = useRef(new Set());
 
-  const loadInventory = async () => {
+  // Cleanup any active intervals on unmount
+  useEffect(() => {
+    const active = activePollIntervalsRef.current;
+    return () => {
+      active.forEach(id => clearInterval(id));
+      active.clear();
+    };
+  }, []);
+
+  const loadInventory = useCallback(async () => {
     try {
       const res = await api.get("/inventory", { params: { low_stock: showLowStock } });
       setInventory(res.data.data);
     } catch { toast.error("โหลดสต๊อกไม่สำเร็จ"); }
-  };
+  }, [showLowStock]);
+
+  const pollApproval = useCallback((approvalId, itemName) => {
+    if (!approvalId) return;
+    const interval = setInterval(async () => {
+      try {
+        const checkRes = await api.get(`/approvals/${approvalId}`);
+        const status = checkRes.data?.data?.status;
+        if (status === 'APPROVED') {
+          clearInterval(interval);
+          activePollIntervalsRef.current.delete(interval);
+          toast.success(`🎉 ผู้จัดการอนุมัติการปรับสต็อก "${itemName}" ใน LINE เรียบร้อยแล้ว!`, { duration: 5000 });
+          loadInventory();
+        } else if (status === 'REJECTED') {
+          clearInterval(interval);
+          activePollIntervalsRef.current.delete(interval);
+          toast.error(`❌ ผู้จัดการปฏิเสธคำขอปรับสต็อก "${itemName}" ใน LINE`, { duration: 5000 });
+          loadInventory();
+        }
+      } catch (err) {
+        console.warn('[pollApproval] check error:', err);
+      }
+    }, 2500);
+    activePollIntervalsRef.current.add(interval);
+  }, [loadInventory]);
+
+  // Reactive background polling when any item in inventory is pending approval
+  const hasPendingAdjust = useMemo(() => inventory.some(i => i.pending_adjust_id), [inventory]);
+  const prevPendingCountRef = useRef(0);
+
+  useEffect(() => {
+    const currentPendingCount = inventory.filter(i => i.pending_adjust_id).length;
+    if (prevPendingCountRef.current > 0 && currentPendingCount < prevPendingCountRef.current) {
+      toast.success("✨ มีรายการปรับสต็อกได้รับการอนุมัติแล้ว (อัปเดตสต็อกเรียบร้อย)", { duration: 4000 });
+    }
+    prevPendingCountRef.current = currentPendingCount;
+  }, [inventory]);
+
+  useEffect(() => {
+    if (!hasPendingAdjust) return;
+    const interval = setInterval(() => {
+      api.get("/inventory", { params: { low_stock: showLowStock } })
+        .then(res => {
+          if (res.data?.data) {
+            setInventory(res.data.data);
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [hasPendingAdjust, showLowStock]);
+
+  useEffect(() => { 
+    loadInventory(); 
+    loadCategories();
+  }, [loadInventory]);
 
   const loadCategories = async () => {
     try {
@@ -258,6 +350,14 @@ export default function InventoryPage() {
   };
 
   const openReceive = useCallback((item) => {
+    if (!canMaintain) {
+      toast.error("คุณมีสิทธิ์ดูข้อมูลเท่านั้น ไม่สามารถรับเข้าสินค้าได้");
+      return;
+    }
+    if (item.pending_adjust_id) {
+      toast.error(`สินค้านี้ (${item.name}) มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE (#${item.pending_adjust_doc}) ไม่สามารถรับเข้าสต็อกได้จนกว่าจะได้รับอนุมัติ`);
+      return;
+    }
     isProcessingRef.current = true; // Lock scanning
     setReceiveModal(item);
     setSingleReceiptPreview(null);
@@ -274,7 +374,7 @@ export default function InventoryPage() {
       bank_name: "",
       new_cost_price: defaultPackPrice ? String(defaultPackPrice) : ""
     });
-  }, []);
+  }, [canMaintain]);
 
   const closeModals = useCallback(() => {
     setReceiveModal(null);
@@ -296,6 +396,14 @@ export default function InventoryPage() {
   }, []);
 
   const openAdjust = useCallback((item) => {
+    if (!canMaintain) {
+      toast.error("คุณมีสิทธิ์ดูข้อมูลเท่านั้น ไม่สามารถปรับสต็อกได้");
+      return;
+    }
+    if (item.pending_adjust_id) {
+      toast.error(`สินค้านี้ (${item.name}) มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE (#${item.pending_adjust_doc}) กรุณารอให้การอนุมัติเสร็จสิ้นก่อน`);
+      return;
+    }
     isProcessingRef.current = true;
     setAdjustModal(item);
     setAdjustConfirm(false);
@@ -306,7 +414,7 @@ export default function InventoryPage() {
       reason_preset: "",
       reason_detail: "",
     });
-  }, []);
+  }, [canMaintain]);
 
   const handleAdjustSubmit = async (e) => {
     e.preventDefault();
@@ -343,7 +451,16 @@ export default function InventoryPage() {
         reason_preset: adjustForm.reason_preset,
         reason_detail: detail,
       });
-      toast.success(res.data.message || "ปรับสต็อกสำเร็จ");
+      if (res.data?.requires_approval) {
+        const approvalId = res.data?.data?.id;
+        const itemName = adjustModal?.name || "สินค้า";
+        toast.success(res.data.message || "ส่งคำขออนุมัติการปรับสต็อกไปยัง LINE เรียบร้อยแล้ว (ระบบจะอัปเดตอัตโนมัติเมื่ออนุมัติ)", { duration: 6000 });
+        if (approvalId) {
+          pollApproval(approvalId, itemName);
+        }
+      } else {
+        toast.success(res.data.message || "ปรับสต็อกสำเร็จ");
+      }
       closeModals();
       loadInventory();
     } catch (err) {
@@ -385,6 +502,10 @@ export default function InventoryPage() {
   }, []);
 
   const openWriteOffModal = (batch) => {
+    if (!canMaintain) {
+      toast.error("คุณมีสิทธิ์ดูข้อมูลเท่านั้น ไม่สามารถตัดสต็อกได้");
+      return;
+    }
     isProcessingRef.current = true;
     setWriteOffModal(batch);
     setWriteOffPreset("หมดอายุ");
@@ -394,6 +515,10 @@ export default function InventoryPage() {
   const handleWriteOffSubmit = async (e) => {
     e.preventDefault();
     if (!writeOffModal) return;
+    if (!canMaintain) {
+      toast.error("คุณมีสิทธิ์ดูข้อมูลเท่านั้น");
+      return;
+    }
     const detail = (writeOffDetail || "").trim();
     if (detail.length < 3) { toast.error("กรุณาระบุเหตุผลการตัดสต็อกล็อต (อย่างน้อย 3 ตัวอักษร)"); return; }
     const remark = `[${writeOffPreset}] ${detail}`;
@@ -451,6 +576,10 @@ export default function InventoryPage() {
 
   const handleUpdateReorder = async (e) => {
     e.preventDefault();
+    if (!canMaintain) {
+      toast.error("คุณมีสิทธิ์ดูข้อมูลเท่านั้น ไม่สามารถแก้ไขจุดสั่งซื้อได้");
+      return;
+    }
     const level = parseInt(newReorderLevel);
     if (isNaN(level) || level < 0) { toast.error("กรุณากรอกตัวเลขที่ถูกต้อง"); return; }
     setSaving(true);
@@ -476,28 +605,34 @@ export default function InventoryPage() {
     
     const found = inventory.find(i => i.barcode === barcode || i.sku === barcode);
     if (found) {
-      openReceive(found);
+      if (canMaintain) {
+        openReceive(found);
+      } else {
+        openHistory(found);
+      }
     } else {
       toast.dismiss();
       toast.error(`ไม่พบสินค้า "${barcode}"`, { id: 'not-found', duration: 2000 });
       
-      const newSku = await generateSku();
-      setPackLocked(false);
-      setProductForm({ 
-        sku: newSku, 
-        barcode: barcode, 
-        name: '', 
-        description: '', 
-        category_id: '',
-        cost_price: '', 
-        selling_price: '', 
-        image_url: '', 
-        is_featured: false, 
-        reorder_level: 5 
-      });
-      setShowProductForm(true);
+      if (canMaintain) {
+        const newSku = await generateSku();
+        setPackLocked(false);
+        setProductForm({ 
+          sku: newSku, 
+          barcode: barcode, 
+          name: '', 
+          description: '', 
+          category_id: '',
+          cost_price: '', 
+          selling_price: '', 
+          image_url: '', 
+          is_featured: false, 
+          reorder_level: 5 
+        });
+        setShowProductForm(true);
+      }
     }
-  }, [inventory, openReceive]);
+  }, [inventory, openReceive, canMaintain, openHistory]);
 
   const handleSearchChange = useCallback((e) => {
     const val = e.target.value;
@@ -507,11 +642,16 @@ export default function InventoryPage() {
 
     const found = inventory.find(i => i.name.toLowerCase() === val.toLowerCase() || i.barcode === val || i.sku === val);
     if (found) {
-      isProcessingRef.current = true;
-      openReceive(found);
-      setSearch("");
+      if (canMaintain) {
+        isProcessingRef.current = true;
+        openReceive(found);
+        setSearch("");
+      } else {
+        openHistory(found);
+        setSearch("");
+      }
     }
-  }, [inventory, openReceive]);
+  }, [inventory, openReceive, canMaintain, openHistory]);
 
   const handleReceive = async (e) => {
     e.preventDefault();
@@ -543,6 +683,7 @@ export default function InventoryPage() {
       toast.success(res.data.message || `รับสินค้า "${receiveModal.name}" เข้า ${totalBaseQty} ${receiveModal.unit || 'ชิ้น'} สำเร็จ`);
       closeModals();
       loadInventory();
+      fetchMovements();
     } catch (err) {
       toast.error(err.response?.data?.error?.message || "เกิดข้อผิดพลาด");
     } finally { setSaving(false); }
@@ -575,8 +716,8 @@ export default function InventoryPage() {
   // Main stock table pagination (page resets on new search / filter)
   const inventoryPaging = usePagination(filtered, 20, search + '|' + showLowStock);
 
-  // Goods Movement pagination (page resets on new search / filter)
-  const movementsPaging = usePagination(movementsData, 10, movementsSearch + '|' + movementsType);
+  // Goods Movement pagination (page resets on new search / filter / date range)
+  const movementsPaging = usePagination(movementsData, 10, movementsSearch + '|' + movementsType + '|' + movementsStartDate + '|' + movementsEndDate);
   const { paged: pagedMovements } = movementsPaging;
   const currentReceiveCost = receiveModal ? Number(receiveModal.cost_price) || 0 : 0;
   const singleNetWeight = receiveModal ? (parseFloat(receiveModal.net_weight) || 1) : 1;
@@ -616,14 +757,16 @@ export default function InventoryPage() {
           </button>
 
           {/* Multi-Product Batch Receive Button */}
-          <button
-            onClick={() => { setShowBatchReceive(true); isProcessingRef.current = true; }}
-            className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-white font-bold text-sm shadow-md hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-2"
-            style={{ backgroundImage: GRAD }}
-          >
-            <span>📦</span>
-            <span>+ รับเข้าสินค้าหลายรายการ</span>
-          </button>
+          {canMaintain && (
+            <button
+              onClick={() => { setShowBatchReceive(true); isProcessingRef.current = true; }}
+              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-white font-bold text-sm shadow-md hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-2"
+              style={{ backgroundImage: GRAD }}
+            >
+              <span>📦</span>
+              <span>+ รับเข้าสินค้าหลายรายการ</span>
+            </button>
+          )}
 
           {lowCount > 0 && (
             <span className="text-xs bg-red-100 text-red-600 font-semibold px-3 py-2 rounded-xl flex items-center gap-1">
@@ -655,8 +798,8 @@ export default function InventoryPage() {
         </button>
       </div>
 
-      {/* Inventory Table */}
-      <div className="card overflow-x-auto">
+      {/* Desktop Table View (>= md) */}
+      <div className="hidden md:block card overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-100 text-left text-xs text-gray-400">
@@ -685,6 +828,13 @@ export default function InventoryPage() {
                     >
                       {item.name}
                     </button>
+                    {item.pending_adjust_id && (
+                      <div className="mt-1">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 animate-pulse" title={`คำขอปรับสต็อก #${item.pending_adjust_doc || ''} อยู่ระหว่างรออนุมัติใน LINE (${item.pending_adjust_reason || ''})`}>
+                          ⏳ รออนุมัติปรับสต็อก {item.pending_adjust_doc ? `(${item.pending_adjust_doc})` : ''}
+                        </span>
+                      </div>
+                    )}
                   </td>
                   <td className="py-2.5 pr-3 text-gray-400 text-xs hidden md:table-cell">{item.category_name}</td>
                   <td className="py-2.5 pr-3 text-right text-gray-500 hidden md:table-cell">
@@ -712,42 +862,62 @@ export default function InventoryPage() {
                     {low && <span className="ml-1 text-xs">⚠️</span>}
                   </td>
                   <td className="py-2.5 pr-3 text-right text-gray-400 hidden md:table-cell">
-                    <button 
-                      onClick={() => { setReorderModal(item); setNewReorderLevel(item.reorder_level); isProcessingRef.current = true; }}
-                      className="hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-all flex items-center justify-end gap-1 ml-auto"
-                      title="แก้ไขจุดสั่งซื้อ"
-                    >
-                      {item.reorder_level}
-                      <span className="text-[10px]">✏️</span>
-                    </button>
+                    {canMaintain && !item.pending_adjust_id ? (
+                      <button 
+                        onClick={() => { setReorderModal(item); setNewReorderLevel(item.reorder_level); isProcessingRef.current = true; }}
+                        className="hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-all flex items-center justify-end gap-1 ml-auto"
+                        title="แก้ไขจุดสั่งซื้อ"
+                      >
+                        {item.reorder_level}
+                        <span className="text-[10px]">✏️</span>
+                      </button>
+                    ) : (
+                      <span className="px-2 py-1 block ml-auto text-gray-600 font-medium">
+                        {item.reorder_level}
+                      </span>
+                    )}
                   </td>
                   <td className="py-2.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {item.is_raw_material === 1 ? (
-                        <button onClick={() => openReceive(item)}
-                          className="text-xs px-3 py-1.5 rounded-xl text-white font-semibold hover:opacity-90 active:scale-95 transition-all shadow-sm"
-                          style={{ backgroundImage: GRAD }}>
-                          + รับเข้า
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => openBatches(item)}
-                          className="text-xs px-2.5 py-1 rounded-lg font-medium text-amber-700 bg-amber-100/80 border border-amber-200/80 inline-flex items-center gap-1 hover:bg-amber-200/80 transition-all"
-                          title="ดูล็อตการผลิต & วันหมดอายุ"
-                        >
-                          🗓️ ล็อต/วันหมดอายุ
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => openAdjust(item)}
-                        className="text-xs px-2.5 py-1.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all shadow-sm border border-indigo-400/60"
-                        title="ปรับปรุงยอดสต็อก (ต้องระบุเหตุผล)"
-                      >
-                        🔧 ปรับสต็อก
-                      </button>
-                    </div>
+                    {item.pending_adjust_id ? (
+                      <div className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-xl font-bold bg-amber-50 text-amber-800 border border-amber-300 shadow-sm" title={`เอกสาร #${item.pending_adjust_doc || ''} รออนุมัติใน LINE: ไม่อนุญาตให้ทำรายการจนกว่าจะได้รับอนุมัติ`}>
+                        <span>🔒</span>
+                        <span>รออนุมัติใน LINE</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {item.is_raw_material === 1 ? (
+                          canMaintain && (
+                            <button onClick={() => openReceive(item)}
+                              className="text-xs px-3 py-1.5 rounded-xl text-white font-semibold hover:opacity-90 active:scale-95 transition-all shadow-sm"
+                              style={{ backgroundImage: GRAD }}>
+                              + รับเข้า
+                            </button>
+                          )
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openBatches(item)}
+                            className="text-xs px-2.5 py-1 rounded-lg font-medium text-amber-700 bg-amber-100/80 border border-amber-200/80 inline-flex items-center gap-1 hover:bg-amber-200/80 transition-all"
+                            title="ดูล็อตการผลิต & วันหมดอายุ"
+                          >
+                            🗓️ ล็อต/วันหมดอายุ
+                          </button>
+                        )}
+                        {canMaintain && (
+                          <button
+                            type="button"
+                            onClick={() => openAdjust(item)}
+                            className="text-xs px-2.5 py-1.5 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all shadow-sm border border-indigo-400/60"
+                            title="ปรับปรุงยอดสต็อก (ต้องระบุเหตุผล)"
+                          >
+                            🔧 ปรับสต็อก
+                          </button>
+                        )}
+                        {!canMaintain && item.is_raw_material === 1 && (
+                          <span className="text-xs text-gray-400 italic px-1">ดูอย่างเดียว</span>
+                        )}
+                      </div>
+                    )}
                   </td>
                 </tr>
               );
@@ -757,6 +927,173 @@ export default function InventoryPage() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Mobile / PWA Card List View (< md) */}
+      <div className="block md:hidden space-y-3">
+        {inventoryPaging.paged.map(item => {
+          const low = item.quantity <= item.reorder_level;
+          return (
+            <div
+              key={item.id}
+              className={`bg-white rounded-2xl p-4 border transition-all shadow-sm ${
+                low ? "border-red-200 bg-red-50/20" : "border-slate-100"
+              }`}
+            >
+              {/* Product Info & Stock */}
+              <div className="flex items-start justify-between gap-3 mb-2.5">
+                <div className="flex-1 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => openHistory(item)}
+                    className="text-left font-bold text-gray-900 hover:text-indigo-600 transition-colors text-base leading-snug break-words"
+                  >
+                    {item.name}
+                  </button>
+                  <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                    <span className="text-[11px] font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
+                      {item.sku}
+                    </span>
+                    {item.category_name && (
+                      <span className="text-[11px] text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                        {item.category_name}
+                      </span>
+                    )}
+                    {item.is_raw_material === 1 ? (
+                      <span className="text-[10px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-full">
+                        📦 วัตถุดิบ
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold text-cyan-800 bg-cyan-100/90 px-2 py-0.5 rounded-full">
+                        🧪 สินค้าผลิต
+                      </span>
+                    )}
+                    {item.pending_adjust_id && (
+                      <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full animate-pulse">
+                        ⏳ รออนุมัติปรับสต็อก ({item.pending_adjust_doc})
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Stock Qty Indicator */}
+                <div className="text-right flex-shrink-0 bg-slate-50 border border-slate-100 rounded-xl px-3 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => openHistory(item)}
+                    className="text-right focus:outline-none"
+                    title="คลิกดูประวัติสต๊อก"
+                  >
+                    <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">คงเหลือ</div>
+                    <div className={`text-xl font-black font-mono leading-tight ${low ? "text-red-600" : "text-emerald-600"}`}>
+                      {formatQty(item.quantity)}
+                    </div>
+                    <div className="text-[11px] font-medium text-gray-500">{item.unit || 'ชิ้น'}</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Cost & Reorder Level Strip */}
+              <div className="flex items-center justify-between text-xs py-2 px-3 bg-gray-50/80 rounded-xl mb-3 border border-gray-100">
+                <div className="text-gray-600">
+                  <span className="text-gray-400">ต้นทุน: </span>
+                  <span className="font-bold text-gray-800">{formatCurrency(item.cost_price)}</span>
+                  <span className="text-gray-400"> / {item.unit || 'ชิ้น'}</span>
+                  {item.pending_cost_price !== null && item.pending_cost_price !== undefined && item.quantity > 0 && (() => {
+                    const oldRemain = item.quantity - (item.last_receive_qty || 0);
+                    return (
+                      <span className="block text-[10px] text-amber-600 font-semibold mt-0.5">
+                        คิวถัดไป: {formatCurrency(item.pending_cost_price)} {oldRemain > 0 ? `(รออีก ${oldRemain} ${item.unit})` : ''}
+                      </span>
+                    );
+                  })()}
+                </div>
+
+                <div className="flex items-center gap-1.5 text-gray-600">
+                  <span className="text-gray-400">จุดสั่งซื้อ:</span>
+                  {canMaintain && !item.pending_adjust_id ? (
+                    <button
+                      type="button"
+                      onClick={() => { setReorderModal(item); setNewReorderLevel(item.reorder_level); isProcessingRef.current = true; }}
+                      className="font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-lg text-xs"
+                      title="แก้ไขจุดสั่งซื้อ"
+                    >
+                      <span>{item.reorder_level} {item.unit || 'ชิ้น'}</span>
+                      <span className="text-[10px]">✏️</span>
+                    </button>
+                  ) : (
+                    <span className="font-semibold text-slate-700 text-xs">
+                      {item.reorder_level} {item.unit || 'ชิ้น'}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {low && (
+                <div className="text-xs text-red-600 font-semibold bg-red-100/80 border border-red-200 px-3 py-1.5 rounded-xl mb-3 flex items-center gap-1.5">
+                  <span>⚠️</span>
+                  <span>สต๊อกใกล้หมด (ต่ำกว่าจุดสั่งซื้อ {item.reorder_level} {item.unit || 'ชิ้น'})</span>
+                </div>
+              )}
+
+              {/* Action Buttons for Mobile Touch */}
+              {item.pending_adjust_id ? (
+                <div className="pt-2 border-t border-gray-100">
+                  <div className="w-full py-2.5 px-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 text-xs font-bold text-center flex items-center justify-center gap-1.5 shadow-sm">
+                    <span>🔒</span>
+                    <span>สินค้านี้อยู่ระหว่างรออนุมัติปรับสต็อกใน LINE ({item.pending_adjust_doc})</span>
+                  </div>
+                </div>
+              ) : (canMaintain || item.is_raw_material !== 1) && (
+                <div className={`grid ${canMaintain && item.is_raw_material === 1 ? 'grid-cols-2' : 'grid-cols-1'} gap-2 pt-1 border-t border-gray-100`}>
+                  {item.is_raw_material === 1 ? (
+                    canMaintain && (
+                      <button
+                        type="button"
+                        onClick={() => openReceive(item)}
+                        className="w-full py-2.5 px-3 rounded-xl text-white font-bold text-xs shadow-sm active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                        style={{ backgroundImage: GRAD }}
+                      >
+                        <span>📥</span>
+                        <span>+ รับเข้าสต๊อก</span>
+                      </button>
+                    )
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => openBatches(item)}
+                      className="w-full py-2.5 px-3 rounded-xl font-bold text-xs text-amber-800 bg-amber-100 border border-amber-300 active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <span>🗓️</span>
+                      <span>ล็อต / หมดอายุ</span>
+                    </button>
+                  )}
+
+                  {canMaintain && (
+                    <button
+                      type="button"
+                      onClick={() => openAdjust(item)}
+                      className="w-full py-2.5 px-3 rounded-xl font-bold text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 active:scale-95 transition-all flex items-center justify-center gap-1.5 hover:bg-indigo-100"
+                    >
+                      <span>🔧</span>
+                      <span>ปรับสต็อก</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {filtered.length === 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 text-center text-gray-400 py-10">
+            ไม่พบสินค้า
+          </div>
+        )}
+      </div>
+
+      {/* Pagination Footer */}
+      <div className="card mt-3">
         <Pagination
           page={inventoryPaging.page}
           totalPages={inventoryPaging.totalPages}
@@ -823,7 +1160,7 @@ export default function InventoryPage() {
               {/* Payment Method */}
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1.5">ชำระเงินด้วย</label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => setForm({ ...form, payment_method: "cash" })}
@@ -834,6 +1171,17 @@ export default function InventoryPage() {
                     }`}
                   >
                     💵 เงินสด
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, payment_method: "qr_promptpay" })}
+                    className={`py-2 rounded-xl border-2 text-xs font-bold transition-all ${
+                      form.payment_method === "qr_promptpay"
+                        ? "border-purple-600 bg-purple-50 text-purple-700"
+                        : "border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200"
+                    }`}
+                  >
+                    📱 สแกนจ่าย
                   </button>
                   <button
                     type="button"
@@ -990,6 +1338,7 @@ export default function InventoryPage() {
           onSuccess={() => {
             closeModals();
             loadInventory();
+            fetchMovements();
           }}
         />
       )}
@@ -1311,7 +1660,7 @@ export default function InventoryPage() {
                         <span className="text-sm font-black text-gray-700">
                           คงเหลือ {batch.qty_remaining} / {batch.qty_produced} {batch.unit}
                         </span>
-                        {batch.status === 'active' && parseFloat(batch.qty_remaining) > 0 && (
+                        {batch.status === 'active' && parseFloat(batch.qty_remaining) > 0 && canMaintain && (
                           <button
                             type="button"
                             onClick={() => openWriteOffModal(batch)}
@@ -1452,7 +1801,7 @@ export default function InventoryPage() {
                 <label className="block text-sm font-medium text-gray-600 mb-1">รายละเอียด <span className="text-red-500">*</span> <span className="text-xs text-gray-400">(บังคับ)</span></label>
                 <input type="text" autoFocus required minLength={3} value={writeOffDetail}
                   onChange={e => setWriteOffDetail(e.target.value)}
-                  className="input-field text-sm" placeholder="เช่น หมดอายุ พบเชื้อรา..." />
+                  className="input-field text-sm" placeholder="เช่น หมดอายุ หรือพบเชื้อรา" />
               </div>
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => { setWriteOffModal(null); setWriteOffDetail(""); setTimeout(() => { isProcessingRef.current = false; }, 300); }} className="btn-ghost flex-1">ยกเลิก</button>
@@ -1504,8 +1853,8 @@ export default function InventoryPage() {
 
       {/* Global Goods Movement Log Modal */}
       {showMovementsModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white text-gray-900 rounded-3xl border border-gray-200 shadow-2xl max-w-5xl w-full p-5 sm:p-6 space-y-5 animate-in fade-in zoom-in-95 my-auto max-h-[92vh] flex flex-col">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-white text-gray-900 rounded-3xl border border-gray-200 shadow-2xl max-w-5xl w-full p-3.5 sm:p-6 space-y-3 sm:space-y-5 animate-in fade-in zoom-in-95 my-auto max-h-[95vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex justify-between items-start border-b border-gray-100 pb-4 flex-shrink-0">
               <div>
@@ -1529,46 +1878,111 @@ export default function InventoryPage() {
             </div>
 
             {/* Filter Controls Bar */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 bg-gray-50 p-3 rounded-2xl border border-gray-200 flex-shrink-0">
-              <div className="relative sm:col-span-2">
-                <input
-                  type="text"
-                  placeholder="🔍 ค้นหาชื่อสินค้า / SKU / PO / GI / หมายเหตุ..."
-                  value={movementsSearch}
-                  onChange={(e) => {
-                    setMovementsSearch(e.target.value);
-                    fetchMovements({ search: e.target.value });
-                  }}
-                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-800 focus:outline-none focus:border-indigo-500"
-                />
+            <div className="bg-gray-50 p-3 sm:p-3.5 rounded-2xl border border-gray-200 flex-shrink-0 space-y-2.5">
+              {/* Row 1: Search & Type Filter */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="sm:col-span-2 relative">
+                  <input
+                    type="text"
+                    placeholder="🔍 ค้นหาชื่อสินค้า / SKU / PO / GI / หมายเหตุ..."
+                    value={movementsSearch}
+                    onChange={(e) => {
+                      setMovementsSearch(e.target.value);
+                      fetchMovements({ search: e.target.value });
+                    }}
+                    className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-800 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <select
+                    value={movementsType}
+                    onChange={(e) => {
+                      setMovementsType(e.target.value);
+                      fetchMovements({ type: e.target.value });
+                    }}
+                    className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-800 focus:outline-none focus:border-indigo-500 font-medium"
+                  >
+                    <option value="all">🌐 ประเภททั้งหมด</option>
+                    <option value="receive">📥 รับสินค้าเข้า (PO/GR)</option>
+                    <option value="issue">📤 เบิกสต๊อกออก (GI/WO)</option>
+                    <option value="sale">🛍️ ขายหน้าร้าน (Sale)</option>
+                    <option value="adjust">🔧 ปรับปรุงยอด (Adjust)</option>
+                    <option value="return">🔄 คืนสินค้า (Return)</option>
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <select
-                  value={movementsType}
-                  onChange={(e) => {
-                    setMovementsType(e.target.value);
-                    fetchMovements({ type: e.target.value });
-                  }}
-                  className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-800 focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="all">🌐 ประเภททั้งหมด</option>
-                  <option value="receive">📥 รับสินค้าเข้า (PO/GR)</option>
-                  <option value="issue">📤 เบิกสต๊อกออก (GI/WO)</option>
-                  <option value="sale">🛍️ ขายหน้าร้าน (Sale)</option>
-                  <option value="adjust">🔧 ปรับปรุงยอด (Adjust)</option>
-                  <option value="return">🔄 คืนสินค้า (Return)</option>
-                </select>
-              </div>
+              {/* Row 2: Date Range (Start Date -> End Date) & Presets */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                {/* Start Date */}
+                <div className="sm:col-span-4 flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl px-2.5 py-1.5">
+                  <span className="text-[11px] font-bold text-gray-500 whitespace-nowrap">📅 ตั้งแต่:</span>
+                  <input
+                    type="date"
+                    value={movementsStartDate}
+                    onChange={(e) => {
+                      setMovementsStartDate(e.target.value);
+                      fetchMovements({ startDate: e.target.value });
+                    }}
+                    className="w-full text-xs text-gray-800 font-mono bg-transparent focus:outline-none cursor-pointer"
+                  />
+                </div>
 
-              <button
-                type="button"
-                onClick={() => fetchMovements()}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-3 py-2 rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5"
-              >
-                <span>🔄</span>
-                <span>รีเฟรชข้อมูล</span>
-              </button>
+                {/* End Date */}
+                <div className="sm:col-span-4 flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl px-2.5 py-1.5">
+                  <span className="text-[11px] font-bold text-gray-500 whitespace-nowrap">📅 ถึง:</span>
+                  <input
+                    type="date"
+                    value={movementsEndDate}
+                    onChange={(e) => {
+                      setMovementsEndDate(e.target.value);
+                      fetchMovements({ endDate: e.target.value });
+                    }}
+                    className="w-full text-xs text-gray-800 font-mono bg-transparent focus:outline-none cursor-pointer"
+                  />
+                </div>
+
+                {/* Quick Presets & Refresh Button */}
+                <div className="sm:col-span-4 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const firstDay = getFirstDayOfMonth();
+                      const todayDate = getTodayDate();
+                      setMovementsStartDate(firstDay);
+                      setMovementsEndDate(todayDate);
+                      fetchMovements({ startDate: firstDay, endDate: todayDate });
+                    }}
+                    className={`date-preset-btn ${movementsStartDate === getFirstDayOfMonth() && movementsEndDate === getTodayDate() ? 'active' : ''}`}
+                    title="วันที่ 1 ของเดือนถึงปัจจุบัน"
+                  >
+                    เดือนนี้
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const todayDate = getTodayDate();
+                      setMovementsStartDate(todayDate);
+                      setMovementsEndDate(todayDate);
+                      fetchMovements({ startDate: todayDate, endDate: todayDate });
+                    }}
+                    className={`date-preset-btn ${movementsStartDate === getTodayDate() && movementsEndDate === getTodayDate() ? 'active' : ''}`}
+                    title="เฉพาะวันนี้"
+                  >
+                    วันนี้
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fetchMovements()}
+                    className="flex-1 sm:flex-initial px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-1 shrink-0 whitespace-nowrap"
+                    title="ดึงข้อมูลใหม่"
+                  >
+                    <span>🔄</span>
+                    <span className="hidden sm:inline">รีเฟรช</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             {/* Statistics Banner */}
@@ -1591,8 +2005,8 @@ export default function InventoryPage() {
               </div>
             </div>
 
-            {/* Movement Data Table */}
-            <div className="flex-1 overflow-x-auto rounded-2xl border border-gray-200 overflow-y-auto max-h-[50vh]">
+            {/* Desktop View (>= md): Full Data Table */}
+            <div className="hidden md:block flex-1 overflow-x-auto rounded-2xl border border-gray-200 overflow-y-auto max-h-[50vh]">
               <table className="w-full text-left text-xs bg-white">
                 <thead className="bg-gray-50 text-gray-500 font-bold uppercase text-[11px] tracking-wider sticky top-0 border-b border-gray-200 z-10">
                   <tr>
@@ -1620,10 +2034,11 @@ export default function InventoryPage() {
                       const isProduction = m.type === 'receive' && (m.gr_number || (m.remark && (m.remark.includes('ผลิต') || m.remark.includes('WO-'))));
                       
                       const woMatch = m.remark ? m.remark.match(/WO-[0-9A-Z-]+/i)?.[0] : null;
+                      const orderMatch = m.remark ? m.remark.match(/(?:CSH|PMP|ORD)-[0-9A-Z-]+/i)?.[0] : null;
+                      const batchMatch = m.remark ? m.remark.match(/Batch\s+([0-9A-Z-]+)/i)?.[1] : null;
+
                       const displayGr = m.gr_number || (isProduction ? woMatch : null);
                       const displayGi = m.gi_number || (m.type === 'issue' ? woMatch : null);
-                      
-                      const cleanRemark = (m.remark || '').replace(/^\[(?:WO|PO|GR|GI)-[0-9A-Z-]+\]\s*/i, '');
                       
                       return (
                         <tr key={m.id} className="hover:bg-gray-50 transition-colors">
@@ -1646,21 +2061,34 @@ export default function InventoryPage() {
                                m.type === 'receive' ? '📥 รับสินค้าเข้า' :
                                m.type === 'issue' ? '📤 เบิกสต๊อกออก' :
                                m.type === 'sale' ? '🛍️ ขายหน้าร้าน' :
-                               m.type === 'adjust' ? '🔧 ปรับปรุงยอด' : m.type}
+                               m.type === 'adjust' ? '🔧 ปรับปรุงยอด' :
+                               m.type === 'return' ? '🔄 คืนสต็อก' : m.type}
                             </span>
                           </td>
                           <td className="p-3 text-center font-mono text-[11px] whitespace-nowrap">
                             {m.po_number ? (
-                              <span className="text-purple-800 bg-purple-100 px-2 py-0.5 rounded-md border border-purple-200 font-bold">
+                              <span className="text-purple-800 bg-purple-100 px-2 py-0.5 rounded-md border border-purple-200 font-bold font-mono text-[10px]">
                                 PO: {m.po_number}
                               </span>
                             ) : displayGr ? (
-                              <span className="text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-200 font-bold">
+                              <span className="text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-200 font-bold font-mono text-[10px]">
                                 GR: {displayGr}
                               </span>
                             ) : displayGi ? (
-                              <span className="text-rose-800 bg-rose-100 px-2 py-0.5 rounded-md border border-rose-200 font-bold">
+                              <span className="text-rose-800 bg-rose-100 px-2 py-0.5 rounded-md border border-rose-200 font-bold font-mono text-[10px]">
                                 GI: {displayGi}
+                              </span>
+                            ) : orderMatch ? (
+                              <span className="text-blue-800 bg-blue-100 px-2 py-0.5 rounded-md border border-blue-200 font-bold font-mono text-[10px]">
+                                {orderMatch}
+                              </span>
+                            ) : woMatch ? (
+                              <span className="text-indigo-800 bg-indigo-100 px-2 py-0.5 rounded-md border border-indigo-200 font-bold font-mono text-[10px]">
+                                {woMatch}
+                              </span>
+                            ) : batchMatch ? (
+                              <span className="text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200 font-bold font-mono text-[10px]">
+                                LOT: {batchMatch}
                               </span>
                             ) : (
                               <span className="text-gray-400">-</span>
@@ -1674,8 +2102,8 @@ export default function InventoryPage() {
                           <td className="p-3 text-center text-gray-600 text-xs font-semibold whitespace-nowrap">
                             {m.user_name || 'ระบบ'}
                           </td>
-                          <td className="p-3 text-gray-600 text-xs max-w-xs truncate" title={cleanRemark}>
-                            {cleanRemark || '-'}
+                          <td className="p-3 text-gray-700 text-xs min-w-[240px] max-w-md break-words whitespace-normal leading-relaxed">
+                            {m.remark || '-'}
                           </td>
                         </tr>
                       );
@@ -1683,6 +2111,137 @@ export default function InventoryPage() {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile / PWA View (< md): Touch-friendly Card List (No horizontal sliding) */}
+            <div className="block md:hidden flex-1 overflow-y-auto max-h-[55vh] space-y-2.5 pr-0.5">
+              {movementsLoading ? (
+                <div className="p-8 text-center text-gray-400 bg-gray-50 rounded-2xl border border-gray-100">
+                  <div className="inline-block animate-spin text-2xl mb-2">⏳</div>
+                  <p className="text-xs">กำลังโหลดข้อมูลการเคลื่อนไหวสต็อก...</p>
+                </div>
+              ) : movementsData.length === 0 ? (
+                <div className="p-8 text-center text-gray-400 bg-gray-50 rounded-2xl border border-gray-100">
+                  <p className="text-xs">ไม่พบประวัติการเคลื่อนไหวสต็อกตามเงื่อนไขที่เลือก</p>
+                </div>
+              ) : (
+                pagedMovements.map((m) => {
+                  const isPositive = m.quantity > 0;
+                  const isProduction = m.type === 'receive' && (m.gr_number || (m.remark && (m.remark.includes('ผลิต') || m.remark.includes('WO-'))));
+                  
+                  const woMatch = m.remark ? m.remark.match(/WO-[0-9A-Z-]+/i)?.[0] : null;
+                  const orderMatch = m.remark ? m.remark.match(/(?:CSH|PMP|ORD)-[0-9A-Z-]+/i)?.[0] : null;
+                  const batchMatch = m.remark ? m.remark.match(/Batch\s+([0-9A-Z-]+)/i)?.[1] : null;
+
+                  const displayGr = m.gr_number || (isProduction ? woMatch : null);
+                  const displayGi = m.gi_number || (m.type === 'issue' ? woMatch : null);
+
+                  return (
+                    <div 
+                      key={m.id}
+                      className="bg-white rounded-2xl p-3.5 border border-gray-200 shadow-sm hover:border-indigo-300 transition-all space-y-2"
+                    >
+                      {/* Card Top: Product Name & Quantity Badge */}
+                      <div className="flex items-start justify-between gap-2.5">
+                        <div className="min-w-0 flex-1">
+                          <h4 className="font-bold text-gray-900 text-sm leading-snug break-words">
+                            {m.product_name}
+                          </h4>
+                          {m.product_sku && (
+                            <span className="text-[10px] font-mono text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded mt-0.5 inline-block">
+                              {m.product_sku}
+                            </span>
+                          )}
+                        </div>
+                        <div className={`px-2.5 py-1 rounded-xl text-xs font-black font-mono shrink-0 ${
+                          isPositive 
+                            ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' 
+                            : 'bg-rose-50 text-rose-600 border border-rose-200'
+                        }`}>
+                          {isPositive ? `+${m.quantity}` : m.quantity} {m.unit}
+                        </div>
+                      </div>
+
+                      {/* Card Middle: Badges (Type, Reference, Operator, Time) */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        {/* Type badge */}
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                          isProduction ? 'bg-indigo-100 text-indigo-800 border-indigo-200' :
+                          m.type === 'receive' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' :
+                          m.type === 'issue' ? 'bg-rose-100 text-rose-800 border-rose-200' :
+                          m.type === 'sale' ? 'bg-purple-100 text-purple-800 border-purple-200' :
+                          'bg-amber-100 text-amber-800 border-amber-200'
+                        }`}>
+                          {isProduction ? '🏭 ผลิตสินค้าสำเร็จ' :
+                           m.type === 'receive' ? '📥 รับสินค้าเข้า' :
+                           m.type === 'issue' ? '📤 เบิกสต๊อกออก' :
+                           m.type === 'sale' ? '🛍️ ขายหน้าร้าน' :
+                           m.type === 'adjust' ? '🔧 ปรับปรุงยอด' :
+                           m.type === 'return' ? '🔄 คืนสต็อก' : m.type}
+                        </span>
+
+                        {/* Reference badge */}
+                        {m.po_number ? (
+                          <span className="text-purple-800 bg-purple-100 px-2 py-0.5 rounded-md border border-purple-200 font-bold font-mono text-[10px]">
+                            PO: {m.po_number}
+                          </span>
+                        ) : displayGr ? (
+                          <span className="text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-200 font-bold font-mono text-[10px]">
+                            GR: {displayGr}
+                          </span>
+                        ) : displayGi ? (
+                          <span className="text-rose-800 bg-rose-100 px-2 py-0.5 rounded-md border border-rose-200 font-bold font-mono text-[10px]">
+                            GI: {displayGi}
+                          </span>
+                        ) : orderMatch ? (
+                          <span className="text-blue-800 bg-blue-100 px-2 py-0.5 rounded-md border border-blue-200 font-bold font-mono text-[10px]">
+                            {orderMatch}
+                          </span>
+                        ) : woMatch ? (
+                          <span className="text-indigo-800 bg-indigo-100 px-2 py-0.5 rounded-md border border-indigo-200 font-bold font-mono text-[10px]">
+                            {woMatch}
+                          </span>
+                        ) : batchMatch ? (
+                          <span className="text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200 font-bold font-mono text-[10px]">
+                            LOT: {batchMatch}
+                          </span>
+                        ) : null}
+
+                        {/* Operator */}
+                        <span className="text-[10px] text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded">
+                          👤 {m.user_name || 'ระบบ'}
+                        </span>
+
+                        {/* Date time */}
+                        <span className="text-[10px] text-gray-400 font-mono ml-auto">
+                          🕒 {new Date(m.created_at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}
+                        </span>
+                      </div>
+
+                      {/* Card Bottom: Remark / Note */}
+                      {m.remark && (
+                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-2 text-xs text-gray-700 break-words leading-relaxed">
+                          <span className="text-gray-400 font-semibold text-[10px] block mb-0.5">หมายเหตุ:</span>
+                          <span>{m.remark}</span>
+                        </div>
+                      )}
+
+                      {/* Receipt Preview Button if present */}
+                      {m.receipt_url && (
+                        <div className="pt-1 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setViewingReceiptUrl(m.receipt_url)}
+                            className="text-[11px] text-purple-700 font-bold hover:underline flex items-center gap-1 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-200 transition-colors"
+                          >
+                            <span>🧾 ดูหลักฐาน / ใบเสร็จ</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </div>
 
             {/* Modal Footer with pagination */}

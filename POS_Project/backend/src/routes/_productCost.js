@@ -46,7 +46,7 @@ async function applyPendingCostIfInventoryEmpty(productId, storeId, quantity, us
     const remark = `ปรับต้นทุนอัตโนมัติ: ฿${oldCostStr} ➔ ฿${newCostStr} (สินค้าเก่าหมด)`;
     
     await db.run(
-      "INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark) VALUES (?, ?, ?, ?, 'adjust', 0, ?)",
+      "INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark, created_at) VALUES (?, ?, ?, ?, 'adjust', 0, ?, datetime('now', '+7 hours'))",
       [uuidv4(), productId, finalUserId, storeId, remark]
     );
   }
@@ -84,7 +84,7 @@ async function queueOrApplyProductCost(productId, storeId, quantityBeforeReceive
         const newCostStr = Number(normalizedCost).toFixed(2);
         const remark = `ปรับต้นทุนอัตโนมัติ: ฿${oldCostStr} ➔ ฿${newCostStr} (รับสินค้าขณะสต๊อกเป็น 0)`;
         await db.run(
-          "INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark) VALUES (?, ?, ?, ?, 'adjust', 0, ?)",
+          "INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark, created_at) VALUES (?, ?, ?, ?, 'adjust', 0, ?, datetime('now', '+7 hours'))",
           [uuidv4(), productId, finalUserId, storeId, remark]
         );
       }

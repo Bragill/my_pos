@@ -1,6 +1,7 @@
 import app from './app';
 import { setWorkerBindings } from './database/dbHelper';
 import batchService from './services/batchService';
+import lineService from './services/lineService';
 import { createExpressHandler } from './adapters/cloudflareExpress';
 
 const handleFetch = createExpressHandler(app);
@@ -24,7 +25,7 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    // Cloudflare Cron Trigger (Scheduled daily task for batch expiry check)
+    // Cloudflare Cron Trigger
     setWorkerBindings(env);
     if (typeof process !== 'undefined' && process.env) {
       for (const [key, value] of Object.entries(env)) {
@@ -34,10 +35,19 @@ export default {
       }
     }
 
+    // 1. Batch expiry check
     ctx.waitUntil(
       batchService.runExpiryCheck().catch((err) => {
         console.error('[Scheduled Worker] Expiry check failed:', err.message);
       })
     );
+
+    // 2. Automated daily sales report via LINE
+    ctx.waitUntil(
+      lineService.sendAutomatedDailyReports().catch((err) => {
+        console.error('[Scheduled Worker] LINE report failed:', err.message);
+      })
+    );
   },
 };
+

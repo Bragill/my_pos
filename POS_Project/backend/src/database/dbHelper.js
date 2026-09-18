@@ -161,4 +161,77 @@ async function run(sql, params = []) {
   };
 }
 
-module.exports = { init, get, all, run, setWorkerBindings, getWorkerBindings };
+function getNativeDb() {
+  return workerBindings?.DB || (typeof globalThis !== 'undefined' && globalThis.__D1_DB__) || null;
+}
+
+/**
+ * Execute multiple write statements.
+ * - Native D1 binding: single atomic DB.batch() call.
+ * - REST mode: sequential execution (each statement is individually atomic).
+ */
+async function batch(statements = []) {
+  const nativeDb = getNativeDb();
+  if (nativeDb && typeof nativeDb.batch === 'function') {
+    const prepared = statements.map((s) => nativeDb.prepare(s.sql).bind(...(s.params || [])));
+    return await nativeDb.batch(prepared);
+  }
+  const results = [];
+  for (const s of statements) {
+    results.push(await module.exports.run(s.sql, s.params || []));
+  }
+  return results;
+}
+
+/**
+ * Strict-ish transaction for order creation + stock deduction.
+ *
+ * work(tx) receives tx = { run(sql, params, undo) } and must perform ALL
+ * database writes through tx.run. Reads may use get()/all() directly.
+ *
+ * - Native D1 binding: statements are collected and executed in ONE atomic
+ *   DB.batch(). If work() throws before completion, nothing is executed.
+ * - REST mode (Cloudflare D1 HTTP API is stateless, no multi-statement
+ *   transactions): statements execute immediately in order; each tx.run may
+ *   carry an `undo` ({ sql, params }) which is executed in reverse order if
+ *   work() throws (best-effort compensation), then the error is rethrown.
+ */
+async function runTransaction(work) {
+  const nativeDb = getNativeDb();
+  if (nativeDb && typeof nativeDb.batch === 'function') {
+    const collected = [];
+    const tx = {
+      run: async (sql, params = []) => {
+        collected.push({ sql, params });
+        return { changes: 0, lastInsertRowid: null };
+      },
+    };
+    const result = await work(tx);
+    const prepared = collected.map((s) => nativeDb.prepare(s.sql).bind(...(s.params || [])));
+    await nativeDb.batch(prepared);
+    return result;
+  }
+
+  const undos = [];
+  const tx = {
+    run: async (sql, params = [], undo = null) => {
+      const res = await module.exports.run(sql, params);
+      if (undo) undos.push(undo);
+      return res;
+    },
+  };
+  try {
+    return await work(tx);
+  } catch (err) {
+    for (let i = undos.length - 1; i >= 0; i--) {
+      try {
+        await module.exports.run(undos[i].sql, undos[i].params || []);
+      } catch (undoErr) {
+        console.error(`[tx rollback] compensation failed: ${undoErr.message}`);
+      }
+    }
+    throw err;
+  }
+}
+
+module.exports = { init, get, all, run, batch, runTransaction, setWorkerBindings, getWorkerBindings };

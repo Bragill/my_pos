@@ -54,6 +54,7 @@ function createExpressHandler(app) {
     // Attach Cloudflare env and ctx for handlers that need it
     req.env = env;
     req.ctx = ctx;
+    req.rawBody = bodyBuffer.toString('utf8');
 
     // 3. Create res
     const resHeaders = new Headers();

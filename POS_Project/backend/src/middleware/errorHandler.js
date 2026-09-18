@@ -22,14 +22,23 @@ const errorHandler = (err, req, res, next) => {
     error: {
       message,
       ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+      ...(err.lock_until && { lock_until: err.lock_until }),
+      ...(err.remaining_seconds && { remaining_seconds: err.remaining_seconds }),
+      ...(err.status && { status: err.status }),
     },
+    ...(err.lock_until && { lock_until: err.lock_until }),
+    ...(err.remaining_seconds && { remaining_seconds: err.remaining_seconds }),
+    ...(err.status && { status: err.status }),
   });
 };
 
 class AppError extends Error {
-  constructor(message, statusCode) {
+  constructor(message, statusCode, details = {}) {
     super(message);
     this.statusCode = statusCode;
+    if (details && typeof details === 'object') {
+      Object.assign(this, details);
+    }
   }
 }
 

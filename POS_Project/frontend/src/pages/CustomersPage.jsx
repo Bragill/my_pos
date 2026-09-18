@@ -1,9 +1,11 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { formatCurrency } from "../utils/format";
 import Pagination from "../components/Pagination";
 import { usePagination } from "../hooks/usePagination";
 import api from "../services/api";
 import toast from "react-hot-toast";
+import { useAuth } from "../contexts/AuthContext";
+import { canMaintainModule } from "../utils/permissions";
 
 const GRAD = "linear-gradient(to left,#3300FC,#95008A,#EB0000)";
 const PAY_METHODS = [
@@ -12,6 +14,8 @@ const PAY_METHODS = [
 ];
 
 export default function CustomersPage() {
+  const { user } = useAuth();
+  const canMaintain = canMaintainModule(user, 'customers');
   const [tab, setTab] = useState("outstanding");
   const [orders, setOrders] = useState([]);
   const [debtors, setDebtors] = useState([]);
@@ -36,6 +40,7 @@ export default function CustomersPage() {
   // delete outstanding order
   const [deleteOrderConfirm, setDeleteOrderConfirm] = useState(null);
   const handleDeleteOrder = async () => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์ลบรายการ');
     try {
       await api.delete(`/orders/${deleteOrderConfirm.id}`);
       toast.success('ลบรายการค้างชำระสำเร็จ');
@@ -78,6 +83,7 @@ export default function CustomersPage() {
 
   /* ── Single order pay ── */
   const handlePayOrder = async () => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์รับชำระเงิน');
     setPaying(true);
     try {
       await api.post(`/orders/${payOrderModal.id}/pay-outstanding`, { payment_method: payMethod });
@@ -90,6 +96,7 @@ export default function CustomersPage() {
 
   /* ── Debtor pay (full / partial) ── */
   const openDebtorPay = (debtor) => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์รับชำระเงิน');
     setDebtorPayModal(debtor);
     setDebtorPayType("full");
     setPartialAmount("");
@@ -97,6 +104,7 @@ export default function CustomersPage() {
   };
 
   const handleDebtorPay = async () => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์รับชำระเงิน');
     setDebtorPaying(true);
     try {
       if (debtorPayType === "full") {
@@ -125,11 +133,20 @@ export default function CustomersPage() {
   };
 
   /* ── Debtor CRUD ── */
-  const openNewDebtor = () => { setDebtorForm({ name: "", phone: "", note: "" }); setDebtorModal("new"); };
-  const openEditDebtor = (d) => { setDebtorForm({ name: d.name, phone: d.phone||"", note: d.note||"" }); setDebtorModal(d); };
+  const openNewDebtor = () => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์จัดการข้อมูลลูกหนี้');
+    setDebtorForm({ name: "", phone: "", note: "" });
+    setDebtorModal("new");
+  };
+  const openEditDebtor = (d) => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์จัดการข้อมูลลูกหนี้');
+    setDebtorForm({ name: d.name, phone: d.phone||"", note: d.note||"" });
+    setDebtorModal(d);
+  };
 
   const handleSaveDebtor = async (e) => {
     e.preventDefault();
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์จัดการข้อมูลลูกหนี้');
     setSavingDebtor(true);
     try {
       if (debtorModal === "new") { await api.post("/debtors", debtorForm); toast.success("เพิ่มลูกหนี้สำเร็จ"); }
@@ -141,6 +158,7 @@ export default function CustomersPage() {
   };
 
   const handleDeleteDebtor = async (d) => {
+    if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์ลบลูกหนี้');
     try {
       await api.delete(`/debtors/${d.id}`);
       toast.success("ลบสำเร็จ");
@@ -171,7 +189,7 @@ export default function CustomersPage() {
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-2xl font-bold text-gray-800">📋 ลูกหนี้/ค้างชำระ</h1>
         <div className="flex gap-2">
-          <button onClick={openNewDebtor} className="btn-primary !py-2 !px-4 text-sm">➕ เพิ่มลูกหนี้</button>
+          {canMaintain && <button onClick={openNewDebtor} className="btn-primary !py-2 !px-4 text-sm">➕ เพิ่มลูกหนี้</button>}
           <button onClick={loadAll} className="btn-ghost !py-2 !px-3 text-sm">🔄</button>
         </div>
       </div>
@@ -251,13 +269,17 @@ export default function CustomersPage() {
                       </div>
                       <div className="text-right flex-shrink-0">
                         <p className="text-xl font-bold" style={{color:"#EB0000"}}>{formatCurrency(order.total_amount)}</p>
-                        <button onClick={()=>{ setPayOrderModal(order); setPayMethod("cash"); }}
-                          className="mt-2 w-full px-4 py-2 rounded-xl text-white text-sm font-semibold shadow hover:opacity-90 active:scale-95 transition-all"
-                          style={{backgroundImage:GRAD}}>💳 รับชำระ</button>
-                        <button onClick={()=>setDeleteOrderConfirm(order)}
-                          className="mt-1.5 w-full px-3 py-1 rounded-lg text-red-400 text-xs border border-red-100 hover:bg-red-50 active:scale-95 transition-all">
-                          🗑️ ลบรายการ
-                        </button>
+                        {canMaintain && (
+                          <>
+                            <button onClick={()=>{ setPayOrderModal(order); setPayMethod("cash"); }}
+                              className="mt-2 w-full px-4 py-2 rounded-xl text-white text-sm font-semibold shadow hover:opacity-90 active:scale-95 transition-all"
+                              style={{backgroundImage:GRAD}}>💳 รับชำระ</button>
+                            <button onClick={()=>setDeleteOrderConfirm(order)}
+                              className="mt-1.5 w-full px-3 py-1 rounded-lg text-red-400 text-xs border border-red-100 hover:bg-red-50 active:scale-95 transition-all">
+                              🗑️ ลบรายการ
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -281,7 +303,7 @@ export default function CustomersPage() {
             ? <div className="card text-center py-16">
                 <p className="text-4xl mb-3">👤</p>
                 <p className="text-gray-500 font-medium">ยังไม่มีรายชื่อลูกหนี้</p>
-                <button onClick={openNewDebtor} className="btn-primary mt-4 !py-2 !px-5 text-sm">➕ เพิ่มลูกหนี้</button>
+                {canMaintain && <button onClick={openNewDebtor} className="btn-primary mt-4 !py-2 !px-5 text-sm">➕ เพิ่มลูกหนี้</button>}
               </div>
             : <div className="space-y-3">
                 {debtorsPaging.paged.map(d => (
@@ -318,19 +340,21 @@ export default function CustomersPage() {
                       </div>
 
                       {/* Actions */}
-                      <div className="flex flex-col gap-1.5 flex-shrink-0 items-end">
-                        {d.order_count > 0 && (
-                          <button onClick={()=>openDebtorPay(d)}
-                            className="px-3 py-1.5 rounded-xl text-white text-xs font-semibold shadow hover:opacity-90 active:scale-95 transition-all"
-                            style={{backgroundImage:GRAD}}>💳 ชำระเงิน</button>
-                        )}
-                        <div className="flex gap-1.5">
-                          <button onClick={()=>openEditDebtor(d)}
-                            className="text-xs px-2.5 py-1.5 rounded-lg border border-purple-200 text-purple-700 hover:bg-purple-50 transition-all">✏️</button>
-                          <button onClick={()=>setDeleteConfirm(d)}
-                            className="text-xs px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-all">🗑️</button>
+                      {canMaintain && (
+                        <div className="flex flex-col gap-1.5 flex-shrink-0 items-end">
+                          {d.order_count > 0 && (
+                            <button onClick={()=>openDebtorPay(d)}
+                              className="px-3 py-1.5 rounded-xl text-white text-xs font-semibold shadow hover:opacity-90 active:scale-95 transition-all"
+                              style={{backgroundImage:GRAD}}>💳 ชำระเงิน</button>
+                          )}
+                          <div className="flex gap-1.5">
+                            <button onClick={()=>openEditDebtor(d)}
+                              className="text-xs px-2.5 py-1.5 rounded-lg border border-purple-200 text-purple-700 hover:bg-purple-50 transition-all">✏️</button>
+                            <button onClick={()=>setDeleteConfirm(d)}
+                              className="text-xs px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-all">🗑️</button>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   </div>
                 ))}

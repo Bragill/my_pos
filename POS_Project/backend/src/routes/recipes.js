@@ -4,6 +4,9 @@ const { authenticate, authorize } = require("../middleware/auth");
 const { AppError } = require("../middleware/errorHandler");
 const { v4: uuidv4 } = require("uuid");
 const batchService = require("../services/batchService");
+const { isLineApprovalRequired, cancelWorkOrder } = require("../services/cancellationService");
+const lineService = require("../services/lineService");
+const { ensureRecipeDeductionColumns } = require("../services/recipeDeduction");
 const router = express.Router();
 
 function getUnitFamily(unitStr) {
@@ -61,9 +64,14 @@ function calculateRecipeItemCost(qty, recipeUnit, ingUnit, ingCostPerUnit) {
 // GET recipe for a specific product
 router.get("/product/:productId", authenticate, async (req, res, next) => {
   try {
+    await ensureRecipeDeductionColumns().catch(() => {});
     const product = await db.get(
-      "SELECT id, name, sku, cost_price, selling_price, recipe_name, recipe_yield, portion_count, portion_unit, shelf_life_days FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
-      [req.params.productId, req.store_id]
+      `SELECT id, name, sku, cost_price, selling_price, recipe_name, recipe_yield, portion_count, portion_unit, shelf_life_days, deduct_recipe_on_sale, yield_unit,
+              (SELECT ar.id FROM approval_requests ar WHERE ar.document_type = 'stock_adjust' AND ar.store_id = ? AND ar.status = 'PENDING' AND (ar.payload LIKE '%"' || products.id || '"%' OR ar.document_id = products.id) LIMIT 1) as pending_adjust_id,
+              (SELECT ar.document_id FROM approval_requests ar WHERE ar.document_type = 'stock_adjust' AND ar.store_id = ? AND ar.status = 'PENDING' AND (ar.payload LIKE '%"' || products.id || '"%' OR ar.document_id = products.id) LIMIT 1) as pending_adjust_doc
+       FROM products 
+       WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')`,
+      [req.store_id, req.store_id, req.params.productId, req.store_id]
     );
 
     if (!product) return next(new AppError("ไม่พบข้อมูลสินค้า", 404));
@@ -73,12 +81,14 @@ router.get("/product/:productId", authenticate, async (req, res, next) => {
               COALESCE(i.name, p.name) as ingredient_name,
               COALESCE(i.unit, p.unit, 'ชิ้น') as ingredient_unit,
               COALESCE(i.cost_per_unit, p.cost_price, 0) as cost_per_unit,
-              COALESCE(i.quantity, 0) as stock_quantity
+              COALESCE(i.quantity, 0) as stock_quantity,
+              (SELECT ar.id FROM approval_requests ar WHERE ar.document_type = 'stock_adjust' AND ar.store_id = ? AND ar.status = 'PENDING' AND (ar.payload LIKE '%"' || r.ingredient_id || '"%' OR ar.document_id = r.ingredient_id) LIMIT 1) as pending_adjust_id,
+              (SELECT ar.document_id FROM approval_requests ar WHERE ar.document_type = 'stock_adjust' AND ar.store_id = ? AND ar.status = 'PENDING' AND (ar.payload LIKE '%"' || r.ingredient_id || '"%' OR ar.document_id = r.ingredient_id) LIMIT 1) as pending_adjust_doc
        FROM recipes r
        LEFT JOIN ingredients i ON r.ingredient_id = i.id
        LEFT JOIN products p ON r.ingredient_id = p.id
        WHERE r.product_id = ? AND (r.store_id = ? OR r.store_id IS NULL OR r.store_id = '')`,
-      [req.params.productId, req.store_id]
+      [req.store_id, req.store_id, req.params.productId, req.store_id]
     );
 
     const formattedItems = [];
@@ -162,6 +172,7 @@ router.get("/product/:productId", authenticate, async (req, res, next) => {
           recipe_yield: yieldQty,
           portion_count: portionQty,
           portion_unit: product.portion_unit || 'แก้ว',
+          yield_unit: product.yield_unit || 'L',
           recipe_name: product.recipe_name || '',
           shelf_life_days: product.shelf_life_days != null ? parseInt(product.shelf_life_days, 10) : null
         },
@@ -179,8 +190,9 @@ router.get("/product/:productId", authenticate, async (req, res, next) => {
 // POST / PUT recipe for a product (Admin/Manager)
 router.post("/product/:productId", authenticate, authorize("admin", "manager"), async (req, res, next) => {
   try {
-    const { items, recipe_name, recipe_yield, portion_count, portion_unit, shelf_life_days, update_product_cost = false, target_product_ids = [] } = req.body;
+    const { items, recipe_name, recipe_yield, portion_count, portion_unit, shelf_life_days, update_product_cost = false, target_product_ids = [], deduct_recipe_on_sale, yield_unit } = req.body;
     const productId = req.params.productId;
+    await ensureRecipeDeductionColumns().catch(() => {});
 
     const product = await db.get(
       "SELECT id, name FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
@@ -200,18 +212,38 @@ router.post("/product/:productId", authenticate, authorize("admin", "manager"), 
     const shelfLifeDays = (shelf_life_days !== undefined && shelf_life_days !== null && shelf_life_days !== '')
       ? Math.max(0, parseInt(shelf_life_days, 10) || 0)
       : null;
+    // Opt-in Recipe Deduction flag: applied to main + mapped products only when explicitly sent
+    const deductFlag = deduct_recipe_on_sale === undefined || deduct_recipe_on_sale === null
+      ? null
+      : (deduct_recipe_on_sale === 1 || deduct_recipe_on_sale === true || deduct_recipe_on_sale === '1' ? 1 : 0);
+    // Batch-yield unit: persisted so the editor selection survives refresh
+    const yieldUnitVal = yield_unit !== undefined && yield_unit !== null ? String(yield_unit).trim() || null : null;
 
-    // Build unique product IDs list to update (including target_product_ids if mapped)
-    const productIdsToUpdate = Array.from(new Set([productId, ...target_product_ids].filter(Boolean)));
+    // Build unique product IDs list to update (excluding any IDs that are ingredients in items to prevent recursive wipeout)
+    const itemIngredientIds = new Set(items.map(i => i.ingredient_id).filter(Boolean));
+    const safeTargetProductIds = (target_product_ids || []).filter(id => id && id !== productId && !itemIngredientIds.has(id));
+    const requestedProductIds = Array.from(new Set([productId, ...safeTargetProductIds]));
+    const existingProducts = requestedProductIds.length > 0 
+      ? await db.all(`SELECT id FROM products WHERE id IN (${requestedProductIds.map(() => '?').join(',')})`, requestedProductIds)
+      : [];
+    const existingProductIds = new Set(existingProducts.map(p => p.id));
+    const productIdsToUpdate = requestedProductIds.filter(id => existingProductIds.has(id));
 
     let calculatedCost = 0;
 
     for (const pid of productIdsToUpdate) {
-      // Update recipe_name, recipe_yield, portion_count, portion_unit, unit in products table
-      await db.run(
-        "UPDATE products SET recipe_name = ?, recipe_yield = ?, portion_count = ?, portion_unit = ?, shelf_life_days = ?, unit = COALESCE(NULLIF(?, ''), unit), updated_at = datetime('now', '+7 hours') WHERE id = ?",
-        [recName, yieldQty, portionQty, portUnit, shelfLifeDays, portUnit, pid]
-      );
+      // Update recipe_name, recipe_yield, portion_count, portion_unit, yield_unit, unit in products table
+      if (deductFlag !== null) {
+        await db.run(
+          "UPDATE products SET recipe_name = ?, recipe_yield = ?, portion_count = ?, portion_unit = ?, shelf_life_days = ?, deduct_recipe_on_sale = ?, yield_unit = COALESCE(?, yield_unit, 'L'), unit = COALESCE(NULLIF(?, ''), unit), updated_at = datetime('now', '+7 hours') WHERE id = ?",
+          [recName, yieldQty, portionQty, portUnit, shelfLifeDays, deductFlag, yieldUnitVal, portUnit, pid]
+        );
+      } else {
+        await db.run(
+          "UPDATE products SET recipe_name = ?, recipe_yield = ?, portion_count = ?, portion_unit = ?, shelf_life_days = ?, yield_unit = COALESCE(?, yield_unit, 'L'), unit = COALESCE(NULLIF(?, ''), unit), updated_at = datetime('now', '+7 hours') WHERE id = ?",
+          [recName, yieldQty, portionQty, portUnit, shelfLifeDays, yieldUnitVal, portUnit, pid]
+        );
+      }
 
       // Delete existing recipe items for this product
       await db.run("DELETE FROM recipes WHERE product_id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')", [pid, req.store_id]);
@@ -220,6 +252,7 @@ router.post("/product/:productId", authenticate, authorize("admin", "manager"), 
 
       for (const item of items) {
         if (!item.ingredient_id || !item.quantity || item.quantity <= 0) continue;
+        if (item.ingredient_id === pid) continue; // Safety guard: A product cannot have itself as an ingredient
 
         let ingredient = await db.get(
           "SELECT id, cost_per_unit, unit FROM ingredients WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
@@ -228,18 +261,23 @@ router.post("/product/:productId", authenticate, authorize("admin", "manager"), 
 
         if (!ingredient) {
           const prod = await db.get(
-            "SELECT id, cost_price as cost_per_unit, unit FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
+            "SELECT id, sku, name, cost_price, unit FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
             [item.ingredient_id, req.store_id]
+          ) || await db.get(
+            "SELECT id, sku, name, cost_price, unit FROM products WHERE id = ?",
+            [item.ingredient_id]
           );
           if (prod) {
-            ingredient = { id: prod.id, cost_per_unit: parseFloat(prod.cost_price) || 0, unit: prod.unit || 'ชิ้น' };
+            const ingUnit = prod.unit || item.unit || 'ชิ้น';
+            const ingCost = parseFloat(prod.cost_price) || 0;
+            ingredient = { id: prod.id, cost_per_unit: ingCost, unit: ingUnit };
           }
         }
 
         if (!ingredient) continue;
 
         const recipeId = uuidv4();
-        const unit = item.unit || ingredient.unit;
+        const unit = item.unit || ingredient.unit || 'ชิ้น';
         const qty = parseFloat(item.quantity);
 
         await db.run(
@@ -260,14 +298,16 @@ router.post("/product/:productId", authenticate, authorize("admin", "manager"), 
     const batchCost = Number(calculatedCost.toFixed(4));
     const unitCost = Number((calculatedCost / portionQty).toFixed(4));
 
-    // Optionally update cost_price directly with unitCost for main product & target mapped products
-    if (update_product_cost || target_product_ids.length > 0) {
-      for (const pid of productIdsToUpdate) {
-        await db.run(
-          "UPDATE products SET cost_price = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?",
-          [unitCost, pid]
-        );
-      }
+    // Always update cost_price directly with unitCost for main product & target mapped products
+    for (const pid of productIdsToUpdate) {
+      await db.run(
+        "UPDATE products SET cost_price = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?",
+        [unitCost, pid]
+      );
+      await db.run(
+        "UPDATE ingredients SET cost_per_unit = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?",
+        [unitCost, pid]
+      );
     }
 
     res.json({
@@ -283,6 +323,8 @@ router.post("/product/:productId", authenticate, authorize("admin", "manager"), 
         portion_count: portionQty,
         portion_unit: portUnit,
         recipe_name: recName,
+        deduct_recipe_on_sale: deductFlag,
+        yield_unit: yieldUnitVal,
         mapped_count: productIdsToUpdate.length
       }
     });
@@ -294,23 +336,36 @@ router.post("/product/:productId", authenticate, authorize("admin", "manager"), 
 // GET summary of all products recipe costs (excluding raw materials)
 router.get("/summary", authenticate, async (req, res, next) => {
   try {
+    await ensureRecipeDeductionColumns().catch(() => {});
     const currentStore = req.store_id || 'store-1';
     const products = await db.all(
-      `SELECT p.id, p.name, p.sku, p.selling_price, p.cost_price, p.recipe_name, p.recipe_yield, p.portion_count, p.portion_unit, p.is_raw_material, c.name as category_name
+      `SELECT p.id, p.name, p.sku, p.selling_price, p.cost_price, p.recipe_name, p.recipe_yield, p.portion_count, p.portion_unit, p.is_raw_material, p.deduct_recipe_on_sale, p.yield_unit, c.name as category_name,
+              (SELECT ar.id FROM approval_requests ar WHERE ar.document_type = 'stock_adjust' AND ar.store_id = ? AND ar.status = 'PENDING' AND (ar.payload LIKE '%"' || p.id || '"%' OR ar.document_id = p.id) LIMIT 1) as pending_adjust_id,
+              (SELECT ar.document_id FROM approval_requests ar WHERE ar.document_type = 'stock_adjust' AND ar.store_id = ? AND ar.status = 'PENDING' AND (ar.payload LIKE '%"' || p.id || '"%' OR ar.document_id = p.id) LIMIT 1) as pending_adjust_doc,
+              (SELECT ar.id FROM recipes r 
+               JOIN approval_requests ar ON ar.document_type = 'stock_adjust' AND ar.store_id = ? AND ar.status = 'PENDING' AND (ar.payload LIKE '%"' || r.ingredient_id || '"%' OR ar.document_id = r.ingredient_id)
+               WHERE r.product_id = p.id LIMIT 1) as recipe_pending_adjust_id
        FROM products p
        LEFT JOIN categories c ON p.category_id = c.id
        WHERE p.is_active = 1 
-         AND (p.is_raw_material = 0 OR p.is_raw_material IS NULL)
-         AND (c.name IS NULL OR (c.name != 'วัตถุดิบ' AND c.name NOT LIKE '%วัตถุดิบ%'))
+         AND (
+           (p.is_raw_material = 0 OR p.is_raw_material IS NULL)
+           OR p.sku LIKE 'REC%'
+           OR (p.recipe_name IS NOT NULL AND p.recipe_name != '')
+           OR EXISTS (SELECT 1 FROM recipes r WHERE r.product_id = p.id)
+         )
          AND (p.store_id = ? OR p.store_id IS NULL OR p.store_id = '')
        ORDER BY p.name ASC`,
-      [currentStore]
+      [currentStore, currentStore, currentStore, currentStore]
     );
 
     const recipeRows = await db.all(
-      `SELECT r.product_id, r.quantity, r.unit as recipe_unit, i.unit as ing_unit, i.cost_per_unit
+      `SELECT r.product_id, r.quantity, r.unit as recipe_unit,
+              COALESCE(i.unit, p.unit, 'ชิ้น') as ing_unit,
+              COALESCE(i.cost_per_unit, p.cost_price, 0) as cost_per_unit
        FROM recipes r
-       JOIN ingredients i ON r.ingredient_id = i.id
+       LEFT JOIN ingredients i ON r.ingredient_id = i.id
+       LEFT JOIN products p ON r.ingredient_id = p.id
        WHERE (r.store_id = ? OR r.store_id IS NULL OR r.store_id = '')`,
       [currentStore]
     );
@@ -325,12 +380,19 @@ router.get("/summary", authenticate, async (req, res, next) => {
         recipe_yield: parseFloat(p.recipe_yield) || 1,
         portion_count: parseFloat(p.portion_count) || parseFloat(p.recipe_yield) || 1,
         portion_unit: p.portion_unit || 'แก้ว',
+        is_raw_material: p.is_raw_material,
+        deduct_recipe_on_sale: p.deduct_recipe_on_sale === 1 ? 1 : 0,
+        yield_unit: p.yield_unit || null,
         sku: p.sku,
         category_name: p.category_name,
         selling_price: p.selling_price,
         current_cost: p.cost_price,
         calculated_cost: 0,
-        ingredient_count: 0
+        ingredient_count: 0,
+        pending_adjust_id: p.pending_adjust_id,
+        pending_adjust_doc: p.pending_adjust_doc,
+        recipe_pending_adjust_id: p.recipe_pending_adjust_id,
+        is_locked: Boolean(p.pending_adjust_id || p.recipe_pending_adjust_id)
       };
     }
 
@@ -363,10 +425,12 @@ router.get("/summary", authenticate, async (req, res, next) => {
 // POST create a new Master Recipe
 router.post("/master", authenticate, authorize("admin", "manager"), async (req, res, next) => {
   try {
-    const { name, category, recipe_yield = 1, yield_unit = 'g', portion_count, portion_unit, selling_price = 0, description = '', items = [], target_product_ids = [], is_raw_material = 0 } = req.body;
+    const { name, category, recipe_yield = 1, yield_unit = 'g', portion_count, portion_unit, selling_price = 0, description = '', items = [], target_product_ids = [], is_raw_material = 0, deduct_recipe_on_sale = 0 } = req.body;
     if (!name || !name.trim()) {
       return next(new AppError("กรุณาระบุชื่อสูตรอาหาร", 400));
     }
+    await ensureRecipeDeductionColumns().catch(() => {});
+    const deductFlag = (deduct_recipe_on_sale === 1 || deduct_recipe_on_sale === true || deduct_recipe_on_sale === '1') ? 1 : 0;
 
     const productId = uuidv4();
     const sku = 'REC' + String(Math.floor(100000 + Math.random() * 900000));
@@ -375,10 +439,25 @@ router.post("/master", authenticate, authorize("admin", "manager"), async (req, 
     const finalUnit = portion_unit || yield_unit || 'ถุง';
     const rawFlag = (is_raw_material === 1 || is_raw_material === true) ? 1 : 0;
 
+    let targetCatId = null;
+    if (category) {
+      const catMatch = await db.get("SELECT id FROM categories WHERE (id = ? OR name = ?) AND (store_id = ? OR store_id IS NULL OR store_id = '') LIMIT 1", [category, category, req.store_id]);
+      if (catMatch) targetCatId = catMatch.id;
+    }
+    if (!targetCatId) {
+      if (rawFlag === 1) {
+        const rawCat = await db.get("SELECT id FROM categories WHERE (name = 'วัตถุดิบ' OR name LIKE '%วัตถุดิบ%' OR is_raw_material = 1) AND (store_id = ? OR store_id IS NULL OR store_id = '') LIMIT 1", [req.store_id]);
+        if (rawCat) targetCatId = rawCat.id;
+      } else {
+        const nonRawCat = await db.get("SELECT id FROM categories WHERE (name != 'วัตถุดิบ' AND name NOT LIKE '%วัตถุดิบ%' AND (is_raw_material = 0 OR is_raw_material IS NULL)) AND (store_id = ? OR store_id IS NULL OR store_id = '') AND is_active = 1 ORDER BY sort_order, name LIMIT 1", [req.store_id]);
+        if (nonRawCat) targetCatId = nonRawCat.id;
+      }
+    }
+
     await db.run(
-      `INSERT INTO products (id, sku, name, description, cost_price, selling_price, recipe_name, recipe_yield, unit, is_raw_material, is_active, store_id)
-       VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1, ?)`,
-      [productId, sku, name.trim(), description, finalSellingPrice, name.trim(), effectiveYield, finalUnit, rawFlag, req.store_id]
+      `INSERT INTO products (id, sku, name, description, category_id, cost_price, selling_price, recipe_name, recipe_yield, unit, is_raw_material, is_active, store_id, deduct_recipe_on_sale, yield_unit)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+      [productId, sku, name.trim(), description, targetCatId, finalSellingPrice, name.trim(), effectiveYield, finalUnit, rawFlag, req.store_id, deductFlag, yield_unit || null]
     );
 
     await db.run(
@@ -397,18 +476,28 @@ router.post("/master", authenticate, authorize("admin", "manager"), async (req, 
       );
       if (!ingredient) {
         const prod = await db.get(
-          "SELECT id, cost_price as cost_per_unit, unit FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
+          "SELECT id, sku, name, cost_price, unit FROM products WHERE id = ? AND (store_id = ? OR store_id IS NULL OR store_id = '')",
           [item.ingredient_id, req.store_id]
+        ) || await db.get(
+          "SELECT id, sku, name, cost_price, unit FROM products WHERE id = ?",
+          [item.ingredient_id]
         );
         if (prod) {
-          ingredient = { id: prod.id, cost_per_unit: parseFloat(prod.cost_price) || 0, unit: prod.unit || 'ชิ้น' };
+          const ingUnit = prod.unit || item.unit || 'ชิ้น';
+          const ingCost = parseFloat(prod.cost_price) || 0;
+          await db.run(
+            `INSERT OR IGNORE INTO ingredients (id, sku, name, unit, cost_per_unit, quantity, reorder_level, store_id)
+             VALUES (?, ?, ?, ?, ?, 0, 0, ?)`,
+            [prod.id, prod.sku || null, prod.name || 'วัตถุดิบ/สินค้า', ingUnit, ingCost, req.store_id]
+          );
+          ingredient = { id: prod.id, cost_per_unit: ingCost, unit: ingUnit };
         }
       }
 
       if (!ingredient) continue;
 
       const recipeId = uuidv4();
-      const rUnit = item.unit || ingredient.unit;
+      const rUnit = item.unit || ingredient.unit || 'ชิ้น';
       const qty = parseFloat(item.quantity);
 
       await db.run(
@@ -432,10 +521,12 @@ router.post("/master", authenticate, authorize("admin", "manager"), async (req, 
     if (Array.isArray(target_product_ids) && target_product_ids.length > 0) {
       for (const targetId of target_product_ids) {
         if (!targetId || targetId === productId) continue;
+        const exists = await db.get("SELECT id FROM products WHERE id = ?", [targetId]);
+        if (!exists) continue;
 
         await db.run(
-          "UPDATE products SET recipe_name = ?, recipe_yield = ?, cost_price = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?",
-          [name.trim(), effectiveYield, unitCost, targetId]
+          "UPDATE products SET recipe_name = ?, recipe_yield = ?, cost_price = ?, deduct_recipe_on_sale = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?",
+          [name.trim(), effectiveYield, unitCost, deductFlag, targetId]
         );
         await db.run("DELETE FROM recipes WHERE product_id = ?", [targetId]);
 
@@ -453,7 +544,7 @@ router.post("/master", authenticate, authorize("admin", "manager"), async (req, 
     res.json({
       success: true,
       message: `สร้างสูตรอาหาร "${name}" เรียบร้อยแล้ว`,
-      data: { id: productId, name, recipe_name: name, recipe_yield: effectiveYield, unit_cost: unitCost }
+      data: { id: productId, name, recipe_name: name, recipe_yield: effectiveYield, unit_cost: unitCost, deduct_recipe_on_sale: deductFlag }
     });
   } catch (err) {
     next(err);
@@ -504,6 +595,15 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
       return next(new AppError("ไม่พบข้อมูลสูตรอาหารที่ต้องการผลิต", 404));
     }
 
+    // Check if the finished product itself has pending stock adjust approval
+    const prodPending = await db.get(
+      "SELECT document_id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = ? AND status = 'PENDING' AND (payload LIKE ? OR document_id = ?)",
+      [currentStore, `%"product_id":"${product_id}"%`, product_id]
+    );
+    if (prodPending) {
+      return next(new AppError(`สินค้า "${product.name}" มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE (#${prodPending.document_id}) ไม่สามารถสร้างใบสั่งผลิต (WO) ได้จนกว่าจะได้รับอนุมัติ`, 400));
+    }
+
     // Get recipe items
     const recipeItems = await db.all(
       `SELECT r.id, r.product_id, r.ingredient_id, r.quantity, r.unit,
@@ -519,6 +619,17 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
 
     if (!recipeItems || recipeItems.length === 0) {
       return next(new AppError(`สูตรอาหาร "${product.recipe_name || product.name}" ยังไม่มีส่วนผสมในระบบ`, 400));
+    }
+
+    // Check if any recipe ingredient has pending stock adjust approval
+    for (const item of recipeItems) {
+      const ingPending = await db.get(
+        "SELECT document_id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = ? AND status = 'PENDING' AND (payload LIKE ? OR document_id = ?)",
+        [currentStore, `%"product_id":"${item.ingredient_id}"%`, item.ingredient_id]
+      );
+      if (ingPending) {
+        return next(new AppError(`วัตถุดิบ "${item.ingredient_name || item.ingredient_id}" ในสูตรการผลิต มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE (#${ingPending.document_id}) ไม่สามารถสร้างใบสั่งผลิต (WO) ได้จนกว่าจะได้รับอนุมัติ`, 400));
+      }
     }
 
     // Calculate required quantities and perform strict stock validation
@@ -605,8 +716,8 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
       const deductionRemark = remark || `ตัดวัตถุดิบจากการผลิตสูตร ${product.recipe_name || product.name} (${count} Batch = -${ing.required_qty_ing_unit} ${ing.ingredient_unit})`;
 
       await db.run(
-        `INSERT INTO ingredient_stock_transactions (id, ingredient_id, user_id, store_id, type, quantity, remark, gr_number, gi_number)
-         VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?)`,
+        `INSERT INTO ingredient_stock_transactions (id, ingredient_id, user_id, store_id, type, quantity, remark, gr_number, gi_number, created_at)
+         VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?, datetime('now', '+7 hours'))`,
         [
           txId, 
           ing.ingredient_id, 
@@ -620,8 +731,8 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
       );
 
       await db.run(
-        `INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark, gr_number, gi_number)
-         VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?)`,
+        `INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark, gr_number, gi_number, created_at)
+         VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?, datetime('now', '+7 hours'))`,
         [
           txId,
           ing.ingredient_id,
@@ -695,8 +806,8 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
 
     // Save Work Order Master Record
     await db.run(
-      `INSERT INTO work_orders (id, store_id, wo_number, product_id, product_name, batch_count, produced_yield, yield_unit, total_cost, user_id, user_name, remark)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO work_orders (id, store_id, wo_number, product_id, product_name, batch_count, produced_yield, yield_unit, total_cost, user_id, user_name, remark, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+7 hours'))`,
       [
         woId,
         currentStore,
@@ -732,8 +843,8 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
 
     // Record stock transaction for finished product yield
     await db.run(
-      `INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark, gr_number)
-       VALUES (?, ?, ?, ?, 'receive', ?, ?, ?)`,
+      `INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark, gr_number, created_at)
+       VALUES (?, ?, ?, ?, 'receive', ?, ?, ?, datetime('now', '+7 hours'))`,
       [
         uuidv4(),
         product_id,
@@ -768,15 +879,27 @@ router.post("/produce", authenticate, authorize("admin", "manager"), async (req,
   }
 });
 
-// GET /work-orders - List Work Orders with search filtering
+// GET /work-orders - List Work Orders with search and date filtering
 router.get("/work-orders", authenticate, async (req, res, next) => {
   try {
     const currentStore = req.store_id || 'store-1';
-    const { search = '', limit = 100 } = req.query;
+    const { search = '', limit = 100, startDate, endDate, start_date, end_date } = req.query;
+    const effectiveStart = startDate || start_date;
+    const effectiveEnd = endDate || end_date;
 
-    let query = `SELECT wo.*, u.full_name as user_full_name
+    let query = `SELECT wo.*, u.full_name as user_full_name,
+                        ar.status as ar_status,
+                        ar.created_at as ar_cancel_requested_at,
+                        ar.requester_name as ar_cancel_requester_name,
+                        ar.responded_at as ar_approved_at,
+                        ar.approver_name as ar_approver_name
                  FROM work_orders wo
                  LEFT JOIN users u ON wo.user_id = u.id
+                 LEFT JOIN (
+                   SELECT document_id, store_id, MAX(created_at) as created_at, MAX(responded_at) as responded_at, MAX(approver_name) as approver_name, MAX(requester_name) as requester_name, MAX(status) as status
+                   FROM approval_requests
+                   GROUP BY document_id, store_id
+                 ) ar ON (wo.wo_number = ar.document_id OR wo.id = ar.document_id) AND (wo.store_id = ar.store_id OR wo.store_id IS NULL OR wo.store_id = '')
                  WHERE (wo.store_id = ? OR wo.store_id IS NULL OR wo.store_id = '')`;
     const params = [currentStore];
 
@@ -785,11 +908,39 @@ router.get("/work-orders", authenticate, async (req, res, next) => {
       params.push(`%${search.trim()}%`, `%${search.trim()}%`);
     }
 
+    if (effectiveStart) {
+      query += ` AND DATE(wo.created_at) >= DATE(?)`;
+      params.push(effectiveStart);
+    }
+
+    if (effectiveEnd) {
+      query += ` AND DATE(wo.created_at) <= DATE(?)`;
+      params.push(effectiveEnd);
+    }
+
     query += ` ORDER BY wo.created_at DESC LIMIT ?`;
     params.push(parseInt(limit) || 100);
 
     const workOrders = await db.all(query, params);
-    res.json({ success: true, data: workOrders });
+    const processedWos = (workOrders || []).map(wo => {
+      let currentStatus = wo.status;
+      if ((currentStatus === 'รออนุมัติ' || currentStatus === 'pending_approval') && wo.ar_status === 'APPROVED') {
+        currentStatus = 'cancelled';
+        db.run(
+          "UPDATE work_orders SET status = 'cancelled', approver_name = ?, approved_at = COALESCE(?, datetime('now', '+7 hours')) WHERE id = ?",
+          [wo.ar_approver_name || 'ผู้จัดการ', wo.ar_approved_at, wo.id]
+        ).catch(() => {});
+      }
+      return {
+        ...wo,
+        status: currentStatus,
+        cancel_requested_at: wo.cancel_requested_at || wo.ar_cancel_requested_at || null,
+        cancel_requester_name: wo.cancel_requester_name || wo.ar_cancel_requester_name || null,
+        approved_at: wo.approved_at || wo.ar_approved_at || null,
+        approver_name: wo.approver_name || wo.ar_approver_name || null
+      };
+    });
+    res.json({ success: true, data: processedWos });
   } catch (err) {
     next(err);
   }
@@ -804,6 +955,28 @@ router.get("/work-orders/:id", authenticate, async (req, res, next) => {
       return next(new AppError("ไม่พบข้อมูล ใบสั่งผลิต (Work Order)", 404));
     }
 
+    // Fallback cancel and approver info from approval_requests if not populated on wo
+    const approval = await db.get(`
+      SELECT status as approval_status, created_at as cancel_requested_at, responded_at as approval_responded_at, requester_name, approver_name
+      FROM approval_requests
+      WHERE (document_id = ? OR document_id = ?) AND (store_id = ? OR store_id IS NULL OR store_id = '')
+      ORDER BY created_at DESC LIMIT 1
+    `, [wo.wo_number, wo.id, wo.store_id || 'store-1']);
+
+    if (approval) {
+      if ((wo.status === 'รออนุมัติ' || wo.status === 'pending_approval') && approval.approval_status === 'APPROVED') {
+        wo.status = 'cancelled';
+        db.run(
+          "UPDATE work_orders SET status = 'cancelled', approver_name = ?, approved_at = COALESCE(?, datetime('now', '+7 hours')) WHERE id = ?",
+          [approval.approver_name || 'ผู้จัดการ', approval.approval_responded_at, wo.id]
+        ).catch(() => {});
+      }
+      if (!wo.cancel_requested_at) wo.cancel_requested_at = approval.cancel_requested_at;
+      if (!wo.cancel_requester_name) wo.cancel_requester_name = approval.requester_name;
+      if (!wo.approved_at) wo.approved_at = approval.approval_responded_at;
+      if (!wo.approver_name) wo.approver_name = approval.approver_name;
+    }
+
     const items = await db.all("SELECT * FROM work_order_items WHERE wo_id = ?", [wo.id]);
     const batch = await db.get("SELECT expiry_date, produced_at, qty_remaining, status FROM product_batches WHERE wo_id = ?", [wo.id]);
     res.json({
@@ -815,6 +988,130 @@ router.get("/work-orders/:id", authenticate, async (req, res, next) => {
         batch_status: batch?.status || null,
         qty_remaining: batch?.qty_remaining ?? null
       }
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /work-orders/:id/cancel - Cancel Work Order (Rollback stock & return ingredients)
+router.post("/work-orders/:id/cancel", authenticate, authorize("admin", "manager"), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const currentStore = req.store_id || 'store-1';
+    const { reason } = req.body || {};
+
+    const wo = await db.get(
+      "SELECT * FROM work_orders WHERE (id = ? OR wo_number = ?) AND (store_id = ? OR store_id IS NULL OR store_id = '')",
+      [id, id, currentStore]
+    );
+
+    if (!wo) {
+      return next(new AppError("ไม่พบข้อมูลใบสั่งผลิต (Work Order)", 404));
+    }
+
+    if (wo.status === 'cancelled') {
+      return next(new AppError("ใบสั่งผลิตนี้ถูกยกเลิกไปแล้ว", 400));
+    }
+
+    if (wo.status === 'รออนุมัติ' || wo.status === 'pending_approval') {
+      return next(new AppError("ใบสั่งผลิตนี้อยู่ระหว่างรอการอนุมัติผ่าน LINE", 400));
+    }
+
+    const lineRequired = await isLineApprovalRequired(currentStore);
+
+    if (lineRequired) {
+      // 1. Update WO status to 'รออนุมัติ'
+      try { await db.run("ALTER TABLE work_orders ADD COLUMN status TEXT DEFAULT 'completed'"); } catch (_) {}
+      try { await db.run("ALTER TABLE work_orders ADD COLUMN cancel_requested_at TEXT"); } catch (_) {}
+      try { await db.run("ALTER TABLE work_orders ADD COLUMN cancel_requester_name TEXT"); } catch (_) {}
+
+      const requesterName = req.user?.full_name || req.user?.username || 'Staff';
+      await db.run(
+        "UPDATE work_orders SET status = 'รออนุมัติ', remark = COALESCE(remark || ' | ', '') || ?, cancel_requested_at = datetime('now', '+7 hours'), cancel_requester_name = ? WHERE id = ?",
+        [`[รออนุมัติยกเลิก: ${reason}]`, requesterName, wo.id]
+      );
+
+      let approval = await db.get(
+        "SELECT * FROM approval_requests WHERE document_id = ? AND store_id = ? AND status = 'PENDING'",
+        [wo.wo_number || wo.id, currentStore]
+      );
+
+      if (!approval) {
+        const woItems = await db.all(`
+          SELECT ingredient_name as name, quantity, unit, cost
+          FROM work_order_items
+          WHERE wo_id = ?
+        `, [wo.id]);
+
+        const approvalPayload = {
+          items: woItems,
+          wo_number: wo.wo_number,
+          product_name: wo.product_name,
+          batch_count: wo.batch_count,
+          produced_yield: wo.produced_yield,
+          yield_unit: wo.yield_unit,
+          total_cost: wo.total_cost
+        };
+
+        approval = {
+          id: uuidv4(),
+          store_id: currentStore,
+          document_type: 'wo_cancel',
+          document_id: wo.wo_number || wo.id,
+          amount: parseFloat(wo.total_cost) || parseFloat(wo.produced_yield) || 0,
+          reason: reason || 'ขอยกเลิกใบสั่งผลิต (Work Order)',
+          requester_id: req.user.id,
+          requester_name: req.user.full_name || req.user.username || 'Staff',
+          status: 'PENDING',
+          payload: JSON.stringify(approvalPayload)
+        };
+
+        await db.run(`
+          INSERT INTO approval_requests
+          (id, store_id, document_type, document_id, amount, reason, requester_id, requester_name, status, payload)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
+        `, [
+          approval.id,
+          approval.store_id,
+          approval.document_type,
+          approval.document_id,
+          approval.amount,
+          approval.reason,
+          approval.requester_id,
+          approval.requester_name,
+          approval.payload
+        ]);
+
+        try {
+          await lineService.sendApprovalRequestNotification(approval);
+        } catch (lineErr) {
+          console.warn('[WO Cancel] Failed to push notification to LINE:', lineErr.message);
+        }
+      }
+
+      return res.json({
+        success: true,
+        requires_approval: true,
+        message: `ส่งคำขออนุมัติยกเลิกใบสั่งผลิต #${wo.wo_number} ไปยัง LINE เรียบร้อยแล้ว`,
+        data: approval
+      });
+    }
+
+    // Direct execution
+    const result = await cancelWorkOrder({
+      woId: wo.id,
+      storeId: currentStore,
+      requesterId: req.user?.id || 'system',
+      approverName: req.user?.full_name || req.user?.username || 'Admin/Manager',
+      reason
+    });
+
+    res.json({
+      success: true,
+      requires_approval: false,
+      message: result.message || `ยกเลิกใบสั่งผลิต ${wo.wo_number} สำเร็จ`,
+      data: result
     });
   } catch (err) {
     next(err);

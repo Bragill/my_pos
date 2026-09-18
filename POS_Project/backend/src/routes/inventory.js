@@ -10,6 +10,8 @@ const {
   queueOrApplyProductCost,
 } = require("./_productCost");
 const batchService = require("../services/batchService");
+const { isLineApprovalRequired, cancelPurchaseOrder } = require("../services/cancellationService");
+const lineService = require("../services/lineService");
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -74,8 +76,19 @@ router.get("/", authenticate, async (req, res, next) => {
       [currentStore]
     );
 
+    // Auto-expire batches and reconcile orphan stock
+    try { await batchService.runExpiryCheck(); } catch (_) {}
+
     const { low_stock, category_id } = req.query;
-    let q = "SELECT p.id,p.sku,p.barcode,p.name,p.unit,p.is_raw_material,p.net_weight,p.cost_price,p.pending_cost_price,p.selling_price,i.quantity,i.reorder_level,c.name as category_name, (SELECT quantity FROM stock_transactions WHERE product_id = p.id AND type = 'receive' AND store_id = i.store_id ORDER BY created_at DESC LIMIT 1) as last_receive_qty FROM inventory i JOIN products p ON i.product_id=p.id AND p.store_id=i.store_id LEFT JOIN categories c ON p.category_id=c.id WHERE p.is_active=1 AND i.store_id=?";
+    let q = `SELECT p.id,p.sku,p.barcode,p.name,p.unit,p.is_raw_material,p.net_weight,p.cost_price,p.pending_cost_price,p.selling_price,i.quantity,i.reorder_level,c.name as category_name, 
+      (SELECT quantity FROM stock_transactions WHERE product_id = p.id AND type = 'receive' AND store_id = i.store_id ORDER BY created_at DESC LIMIT 1) as last_receive_qty,
+      (SELECT id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = i.store_id AND status = 'PENDING' AND (payload LIKE '%"' || p.id || '"%' OR document_id = p.id) LIMIT 1) as pending_adjust_id,
+      (SELECT document_id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = i.store_id AND status = 'PENDING' AND (payload LIKE '%"' || p.id || '"%' OR document_id = p.id) LIMIT 1) as pending_adjust_doc,
+      (SELECT reason FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = i.store_id AND status = 'PENDING' AND (payload LIKE '%"' || p.id || '"%' OR document_id = p.id) LIMIT 1) as pending_adjust_reason
+    FROM inventory i 
+    JOIN products p ON i.product_id=p.id AND p.store_id=i.store_id 
+    LEFT JOIN categories c ON p.category_id=c.id 
+    WHERE p.is_active=1 AND i.store_id=?`;
     const params = [currentStore];
     if (low_stock === "true") {
       q += " AND i.quantity<=i.reorder_level";
@@ -124,6 +137,23 @@ router.get("/movements", authenticate, async (req, res, next) => {
   try {
     const currentStore = req.store_id || req.user?.store_id || 'store-1';
     const { search, type, startDate, endDate } = req.query;
+
+    // Self-heal: Ensure any PO or WO stock_transactions match their source created_at
+    try {
+      await db.run(`
+        UPDATE stock_transactions 
+        SET created_at = (SELECT po.created_at FROM purchase_orders po WHERE po.po_number = stock_transactions.po_number LIMIT 1)
+        WHERE po_number IS NOT NULL 
+          AND created_at LIKE '% 00:00:00'
+          AND EXISTS (SELECT 1 FROM purchase_orders po WHERE po.po_number = stock_transactions.po_number)
+      `);
+      await db.run(`
+        UPDATE stock_transactions 
+        SET created_at = (SELECT wo.created_at FROM work_orders wo WHERE wo.wo_number = COALESCE(stock_transactions.gr_number, stock_transactions.gi_number) LIMIT 1)
+        WHERE (gr_number LIKE 'WO-%' OR gi_number LIKE 'WO-%')
+          AND EXISTS (SELECT 1 FROM work_orders wo WHERE wo.wo_number = COALESCE(stock_transactions.gr_number, stock_transactions.gi_number))
+      `);
+    } catch (_) {}
 
     let q = `
       SELECT * FROM (
@@ -202,7 +232,7 @@ router.get("/movements", authenticate, async (req, res, next) => {
       params.push(`${endDate} 23:59:59`);
     }
 
-    q += ` ORDER BY created_at DESC LIMIT 300`;
+    q += ` ORDER BY created_at DESC, id DESC LIMIT 300`;
 
     const rows = await db.all(q, params);
     res.json({ success: true, data: rows || [] });
@@ -226,7 +256,23 @@ router.post("/receive", authenticate, authorize("admin", "manager"), async (req,
       return res.status(400).json({ success: false, error: { message: "จำนวนสินค้าไม่ถูกต้อง" } });
     }
 
-    const createdAt = received_date ? received_date + ' 00:00:00' : null;
+    // Check if item has pending stock adjust approval
+    const pendingApproval = await db.get(
+      "SELECT document_id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = ? AND status = 'PENDING' AND (payload LIKE ? OR document_id = ?)",
+      [req.store_id, `%"product_id":"${product_id}"%`, product_id]
+    );
+    if (pendingApproval) {
+      return res.status(400).json({
+        success: false,
+        error: { message: `สินค้านี้มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE (#${pendingApproval.document_id}) ไม่อนุญาตให้ทำรายการรับเข้าสต็อกจนกว่าจะได้รับอนุมัติ` }
+      });
+    }
+
+    const bkkTime = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date());
+    const bkkToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+    const recDate = received_date || bkkToday;
+    const createdAt = `${recDate} ${bkkTime}`;
+
     const inv = await db.get("SELECT quantity FROM inventory WHERE product_id=? AND store_id=?", [product_id, req.store_id]);
     const currentQty = inv ? inv.quantity : 0;
 
@@ -242,9 +288,9 @@ router.post("/receive", authenticate, authorize("admin", "manager"), async (req,
 
     // Create Purchase Order record
     await db.run(
-      `INSERT INTO purchase_orders (id, store_id, po_number, user_id, total_amount, payment_method, bank_name, received_date, receipt_image_url, remark)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [poId, req.store_id, poNumber, req.user.id, totalAmount, payment_method || 'cash', bank_name || null, received_date || new Date().toISOString().slice(0, 10), receipt_url, remark || 'รับเข้าสินค้า']
+      `INSERT INTO purchase_orders (id, store_id, po_number, user_id, total_amount, payment_method, bank_name, received_date, receipt_image_url, remark, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [poId, req.store_id, poNumber, req.user.id, totalAmount, payment_method || 'cash', bank_name || null, recDate, receipt_url, remark || 'รับเข้าสินค้า', createdAt]
     );
 
     // Create Purchase Order Item record
@@ -270,13 +316,8 @@ router.post("/receive", authenticate, authorize("admin", "manager"), async (req,
       ? `${baseRemark} (ต้นทุน ฿${Number(new_cost_price).toFixed(2)}) [PO: ${poNumber}]`
       : `${baseRemark} [PO: ${poNumber}]`;
 
-    if (createdAt) {
-      await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,created_at,store_id,po_number,receipt_url) VALUES (?,?,?,'receive',?,?,?,?,?,?)",
-        [uuidv4(), product_id, req.user.id, qtyNum, finalRemark, createdAt, req.store_id, poNumber, receipt_url]);
-    } else {
-      await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id,po_number,receipt_url) VALUES (?,?,?,'receive',?,?,?,?,?)",
-        [uuidv4(), product_id, req.user.id, qtyNum, finalRemark, req.store_id, poNumber, receipt_url]);
-    }
+    await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,created_at,store_id,po_number,receipt_url) VALUES (?,?,?,'receive',?,?,?,?,?,?)",
+      [uuidv4(), product_id, req.user.id, qtyNum, finalRemark, createdAt, req.store_id, poNumber, receipt_url]);
 
     res.json({ success: true, message: `รับสินค้าสำเร็จ (เลขที่ PO: ${poNumber})`, po_number: poNumber });
   } catch(e) { next(e); }
@@ -295,8 +336,25 @@ router.post("/receive-batch", authenticate, authorize("admin", "manager"), async
       return res.status(400).json({ success: false, error: { message: "กรุณาเลือกสินค้าอย่างน้อย 1 รายการ" } });
     }
 
-    const recDate = received_date || new Date().toISOString().slice(0, 10);
-    const createdAt = recDate ? recDate + ' 00:00:00' : null;
+    // Check if any item in batch has pending stock adjust approval
+    for (const item of items) {
+      const pendingApproval = await db.get(
+        "SELECT document_id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = ? AND status = 'PENDING' AND (payload LIKE ? OR document_id = ?)",
+        [req.store_id, `%"product_id":"${item.product_id}"%`, item.product_id]
+      );
+      if (pendingApproval) {
+        const prd = await db.get("SELECT name FROM products WHERE id=? AND store_id=?", [item.product_id, req.store_id]);
+        return res.status(400).json({
+          success: false,
+          error: { message: `สินค้า "${prd?.name || item.product_id}" มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE (#${pendingApproval.document_id}) ไม่สามารถรับเข้าสินค้าได้จนกว่าจะได้รับอนุมัติ` }
+        });
+      }
+    }
+
+    const bkkTime = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date());
+    const bkkToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+    const recDate = received_date || bkkToday;
+    const createdAt = `${recDate} ${bkkTime}`;
 
     // Generate Single PO Number for the entire batch
     const poNumber = await generatePONumber(req.store_id);
@@ -338,9 +396,9 @@ router.post("/receive-batch", authenticate, authorize("admin", "manager"), async
 
     // Insert Purchase Order master record
     await db.run(
-      `INSERT INTO purchase_orders (id, store_id, po_number, user_id, total_amount, payment_method, bank_name, received_date, receipt_image_url, remark)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [poId, req.store_id, poNumber, req.user.id, grandTotal, payment_method || 'cash', bank_name || null, recDate, receipt_url, remark || 'รับเข้าหลายรายการ']
+      `INSERT INTO purchase_orders (id, store_id, po_number, user_id, total_amount, payment_method, bank_name, received_date, receipt_image_url, remark, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [poId, req.store_id, poNumber, req.user.id, grandTotal, payment_method || 'cash', bank_name || null, recDate, receipt_url, remark || 'รับเข้าหลายรายการ', createdAt]
     );
 
     // Process each product in transaction
@@ -368,13 +426,8 @@ router.post("/receive-batch", authenticate, authorize("admin", "manager"), async
         ? `${baseRemark} (ต้นทุน ฿${Number(pi.new_cost_price).toFixed(2)}) [PO: ${poNumber}]`
         : `${baseRemark} [PO: ${poNumber}]`;
 
-      if (createdAt) {
-        await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,created_at,store_id,po_number,receipt_url) VALUES (?,?,?,'receive',?,?,?,?,?,?)",
-          [uuidv4(), pi.product_id, req.user.id, pi.quantity, finalRemark, createdAt, req.store_id, poNumber, receipt_url]);
-      } else {
-        await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id,po_number,receipt_url) VALUES (?,?,?,'receive',?,?,?,?,?)",
-          [uuidv4(), pi.product_id, req.user.id, pi.quantity, finalRemark, req.store_id, poNumber, receipt_url]);
-      }
+      await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,created_at,store_id,po_number,receipt_url) VALUES (?,?,?,'receive',?,?,?,?,?,?)",
+        [uuidv4(), pi.product_id, req.user.id, pi.quantity, finalRemark, createdAt, req.store_id, poNumber, receipt_url]);
     }
 
     res.json({
@@ -390,10 +443,22 @@ router.post("/issue", authenticate, authorize("admin","manager"), async (req, re
   try {
     const { product_id, quantity, remark } = req.body;
     const currentStore = req.store_id || req.user?.store_id || 'store-1';
+
+    const pendingApproval = await db.get(
+      "SELECT document_id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = ? AND status = 'PENDING' AND (payload LIKE ? OR document_id = ?)",
+      [currentStore, `%"product_id":"${product_id}"%`, product_id]
+    );
+    if (pendingApproval) {
+      return res.status(400).json({
+        success: false,
+        error: { message: `สินค้านี้มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE (#${pendingApproval.document_id}) ไม่สามารถเบิกสินค้าได้จนกว่าจะได้รับอนุมัติ` }
+      });
+    }
+
     const grNumber = await generateGRNumber(currentStore);
 
     await db.run("UPDATE inventory SET quantity=quantity-?,updated_at=datetime('now', '+7 hours') WHERE product_id=? AND store_id=?", [quantity, product_id, currentStore]);
-    await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id,gr_number) VALUES (?,?,?,'issue',?,?,?,?)", [uuidv4(), product_id, req.user.id, -quantity, remark||null, currentStore, grNumber]);
+    await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id,gr_number,created_at) VALUES (?,?,?,'issue',?,?,?,?,datetime('now', '+7 hours'))", [uuidv4(), product_id, req.user.id, -quantity, remark||null, currentStore, grNumber]);
     const invAfter = await db.get("SELECT quantity FROM inventory WHERE product_id=? AND store_id=?", [product_id, currentStore]);
     await applyPendingCostIfInventoryEmpty(product_id, currentStore, invAfter ? invAfter.quantity : 0, req.user.id);
     await syncProductQtyToIngredient(product_id, currentStore);
@@ -457,10 +522,87 @@ router.post("/adjust", authenticate, authorize("admin","manager"), async (req, r
       return res.status(400).json({ success: false, error: { message: "ยอดใหม่เท่ากับยอดเดิม ไม่มีการเปลี่ยนแปลง" } });
     }
 
+    // Check if LINE approval is required
+    const lineRequired = await isLineApprovalRequired(storeId);
+    if (lineRequired) {
+      const prd = await db.get("SELECT name, sku, unit FROM products WHERE id=? AND store_id=?", [product_id, storeId]);
+      const productName = prd?.name || 'สินค้า';
+      const productSku = prd?.sku || '';
+      const productUnit = prd?.unit || 'ชิ้น';
+
+      // Check if there is already a PENDING approval for this product
+      const existingPending = await db.get(
+        "SELECT id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = ? AND status = 'PENDING' AND (payload LIKE ? OR document_id = ?)",
+        [storeId, `%"product_id":"${product_id}"%`, product_id]
+      );
+      if (existingPending) {
+        return res.status(400).json({
+          success: false,
+          error: { message: `สินค้านี้ (${productName}) มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE แล้ว กรุณารอการอนุมัติก่อนทำรายการใหม่` }
+        });
+      }
+
+      const docNumber = `ADJ-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const approvalPayload = JSON.stringify({
+        product_id,
+        product_name: productName,
+        product_sku: productSku,
+        unit: productUnit,
+        mode: normMode,
+        diff,
+        previous_quantity: currentQty,
+        target_quantity: targetQty,
+        reason_preset: preset,
+        reason_detail: finalDetail
+      });
+
+      const approval = {
+        id: uuidv4(),
+        store_id: storeId,
+        document_type: 'stock_adjust',
+        document_id: docNumber,
+        amount: Math.abs(diff),
+        reason: `${preset ? `[${preset}] ` : ''}${finalDetail}`.trim(),
+        requester_id: req.user.id,
+        requester_name: req.user.full_name || req.user.username || 'Staff',
+        status: 'PENDING',
+        payload: approvalPayload
+      };
+
+      await db.run(`
+        INSERT INTO approval_requests
+        (id, store_id, document_type, document_id, amount, reason, requester_id, requester_name, status, payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
+      `, [
+        approval.id,
+        approval.store_id,
+        approval.document_type,
+        approval.document_id,
+        approval.amount,
+        approval.reason,
+        approval.requester_id,
+        approval.requester_name,
+        approval.payload
+      ]);
+
+      try {
+        await lineService.sendApprovalRequestNotification(approval);
+      } catch (lineErr) {
+        console.warn('[Stock Adjust] Failed to push notification to LINE:', lineErr.message);
+      }
+
+      return res.json({
+        success: true,
+        requires_approval: true,
+        message: `ส่งคำขออนุมัติการปรับสต็อก "${productName}" (${diff > 0 ? '+' : ''}${diff} ${productUnit}) ไปยัง LINE เรียบร้อยแล้ว`,
+        data: approval
+      });
+    }
+
     await db.run("UPDATE inventory SET quantity=?,updated_at=datetime('now', '+7 hours') WHERE product_id=? AND store_id=?", [targetQty, product_id, storeId]);
     const presetLabel = preset ? `[${preset}] ` : "";
     const finalRemark = `ปรับสต็อก ${presetLabel}${finalDetail} (${currentQty} → ${targetQty})`;
-    await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id) VALUES (?,?,?,'adjust',?,?,?)", [uuidv4(), product_id, req.user.id, diff, finalRemark, storeId]);
+    await db.run("INSERT INTO stock_transactions (id,product_id,user_id,type,quantity,remark,store_id,created_at) VALUES (?,?,?,'adjust',?,?,?,datetime('now', '+7 hours'))", [uuidv4(), product_id, req.user.id, diff, finalRemark, storeId]);
     // Auxiliary bookkeeping must never block the core adjustment
     try {
       await applyPendingCostIfInventoryEmpty(product_id, storeId, targetQty, req.user.id);
@@ -470,6 +612,8 @@ router.post("/adjust", authenticate, authorize("admin","manager"), async (req, r
     } catch (auxErr) { console.error("[inventory/adjust] ingredient sync failed:", auxErr.message); }
     if (diff < 0) {
       await batchService.deductFromBatches(product_id, storeId, -diff);
+    } else if (diff > 0) {
+      await batchService.restoreToBatches(product_id, storeId, diff);
     }
     res.json({ success: true, message: `ปรับสต็อกสำเร็จ (${currentQty} → ${targetQty})`, previous_quantity: currentQty, new_quantity: targetQty, diff });
   } catch(e) {
@@ -481,6 +625,16 @@ router.post("/adjust", authenticate, authorize("admin","manager"), async (req, r
 router.put("/reorder-level", authenticate, authorize("admin","manager"), async (req, res, next) => {
   try {
     const { product_id, reorder_level } = req.body;
+    const pendingApproval = await db.get(
+      "SELECT document_id FROM approval_requests WHERE document_type = 'stock_adjust' AND store_id = ? AND status = 'PENDING' AND (payload LIKE ? OR document_id = ?)",
+      [req.store_id, `%"product_id":"${product_id}"%`, product_id]
+    );
+    if (pendingApproval) {
+      return res.status(400).json({
+        success: false,
+        error: { message: `สินค้านี้มีคำขอปรับสต็อกรอการอนุมัติอยู่ใน LINE (#${pendingApproval.document_id}) ไม่สามารถแก้ไขจุดสั่งซื้อได้จนกว่าจะได้รับอนุมัติ` }
+      });
+    }
     await db.run("UPDATE inventory SET reorder_level=?, updated_at=datetime('now', '+7 hours') WHERE product_id=? AND store_id=?", [reorder_level, product_id, req.store_id]);
     res.json({ success: true, message: "Reorder level updated" });
   } catch(e) { next(e); }
@@ -489,6 +643,7 @@ router.put("/reorder-level", authenticate, authorize("admin","manager"), async (
 // GET /batches - list production batches (expiry tracking) for the current store, optionally filtered
 router.get("/batches", authenticate, async (req, res, next) => {
   try {
+    try { await batchService.runExpiryCheck(); } catch (_) {}
     const { product_id, status } = req.query;
     let query = `
       SELECT b.*, p.name as product_name, p.sku,
@@ -539,7 +694,11 @@ router.post("/batches/:id/writeoff", authenticate, authorize("admin","manager"),
     if (removeQty > 0) {
       await db.run("UPDATE inventory SET quantity=quantity-?, updated_at=datetime('now', '+7 hours') WHERE product_id=? AND store_id=?", [removeQty, batch.product_id, req.store_id]);
       await db.run(
-        "INSERT INTO stock_transactions (id,store_id,product_id,user_id,type,quantity,remark) VALUES (?,?,?,?,'expired',?,?)",
+        "UPDATE ingredients SET quantity=quantity-?, updated_at=datetime('now', '+7 hours') WHERE (id=? OR sku=(SELECT sku FROM products WHERE id=?)) AND (store_id=? OR store_id IS NULL OR store_id='')",
+        [removeQty, batch.product_id, batch.product_id, req.store_id]
+      ).catch(() => {});
+      await db.run(
+        "INSERT INTO stock_transactions (id,store_id,product_id,user_id,type,quantity,remark,created_at) VALUES (?,?,?,?,'expired',?,?,datetime('now', '+7 hours'))",
         [uuidv4(), req.store_id, batch.product_id, req.user.id, -removeQty, `ตัดสต็อกล็อต (Batch ${batch.wo_number || batch.id}): ${reasonText}`]
       );
     }
@@ -560,10 +719,20 @@ router.get("/purchase-orders", authenticate, async (req, res, next) => {
     const { startDate, endDate, search, paymentMethod } = req.query;
 
     let q = `
-      SELECT po.id, po.store_id, po.po_number, po.user_id, po.total_amount, po.payment_method, po.bank_name, po.received_date, po.receipt_image_url, po.remark, po.created_at,
-             COALESCE(u.full_name, u.username, 'ผู้ใช้งาน') as user_name
+      SELECT po.*,
+             COALESCE(u.full_name, u.username, 'ผู้ใช้งาน') as user_name,
+             ar.status as ar_status,
+             ar.created_at as ar_cancel_requested_at,
+             ar.requester_name as ar_cancel_requester_name,
+             ar.responded_at as ar_approved_at,
+             ar.approver_name as ar_approver_name
       FROM purchase_orders po
       LEFT JOIN users u ON po.user_id = u.id
+      LEFT JOIN (
+        SELECT document_id, store_id, MAX(created_at) as created_at, MAX(responded_at) as responded_at, MAX(approver_name) as approver_name, MAX(requester_name) as requester_name, MAX(status) as status
+        FROM approval_requests
+        GROUP BY document_id, store_id
+      ) ar ON (po.po_number = ar.document_id OR po.id = ar.document_id) AND (po.store_id = ar.store_id OR po.store_id IS NULL OR po.store_id = '')
       WHERE (po.store_id = ? OR po.store_id IS NULL OR po.store_id = '')
     `;
     const params = [currentStore];
@@ -592,7 +761,25 @@ router.get("/purchase-orders", authenticate, async (req, res, next) => {
     q += ` ORDER BY po.created_at DESC LIMIT 300`;
 
     const rows = await db.all(q, params);
-    res.json({ success: true, data: rows || [] });
+    const processedRows = (rows || []).map(row => {
+      let currentStatus = row.status;
+      if ((currentStatus === 'รออนุมัติ' || currentStatus === 'pending_approval') && row.ar_status === 'APPROVED') {
+        currentStatus = 'cancelled';
+        db.run(
+          "UPDATE purchase_orders SET status = 'cancelled', approver_name = ?, approved_at = COALESCE(?, datetime('now', '+7 hours')) WHERE id = ?",
+          [row.ar_approver_name || 'ผู้จัดการ', row.ar_approved_at, row.id]
+        ).catch(() => {});
+      }
+      return {
+        ...row,
+        status: currentStatus,
+        cancel_requested_at: row.cancel_requested_at || row.ar_cancel_requested_at || null,
+        cancel_requester_name: row.cancel_requester_name || row.ar_cancel_requester_name || null,
+        approved_at: row.approved_at || row.ar_approved_at || null,
+        approver_name: row.approver_name || row.ar_approver_name || null
+      };
+    });
+    res.json({ success: true, data: processedRows });
   } catch (e) {
     next(e);
   }
@@ -603,7 +790,7 @@ router.get("/purchase-orders/:id", authenticate, async (req, res, next) => {
   try {
     const currentStore = req.store_id || req.user?.store_id || 'store-1';
     const po = await db.get(
-      `SELECT po.id, po.store_id, po.po_number, po.user_id, po.total_amount, po.payment_method, po.bank_name, po.received_date, po.receipt_image_url, po.remark, po.created_at,
+      `SELECT po.*,
               COALESCE(u.full_name, u.username, 'ผู้ใช้งาน') as user_name
        FROM purchase_orders po
        LEFT JOIN users u ON po.user_id = u.id
@@ -613,6 +800,28 @@ router.get("/purchase-orders/:id", authenticate, async (req, res, next) => {
 
     if (!po) {
       return res.status(404).json({ success: false, error: { message: "ไม่พบข้อมูลใบสั่งซื้อ/รับสินค้า (PO)" } });
+    }
+
+    // Fallback cancel and approver info from approval_requests if not populated on po
+    const approval = await db.get(`
+      SELECT status as approval_status, created_at as cancel_requested_at, responded_at as approval_responded_at, requester_name, approver_name
+      FROM approval_requests
+      WHERE (document_id = ? OR document_id = ?) AND (store_id = ? OR store_id IS NULL OR store_id = '')
+      ORDER BY created_at DESC LIMIT 1
+    `, [po.po_number, po.id, currentStore]);
+
+    if (approval) {
+      if ((po.status === 'รออนุมัติ' || po.status === 'pending_approval') && approval.approval_status === 'APPROVED') {
+        po.status = 'cancelled';
+        db.run(
+          "UPDATE purchase_orders SET status = 'cancelled', approver_name = ?, approved_at = COALESCE(?, datetime('now', '+7 hours')) WHERE id = ?",
+          [approval.approver_name || 'ผู้จัดการ', approval.approval_responded_at, po.id]
+        ).catch(() => {});
+      }
+      if (!po.cancel_requested_at) po.cancel_requested_at = approval.cancel_requested_at;
+      if (!po.cancel_requester_name) po.cancel_requester_name = approval.requester_name;
+      if (!po.approved_at) po.approved_at = approval.approval_responded_at;
+      if (!po.approver_name) po.approver_name = approval.approver_name;
     }
 
     const items = await db.all(
@@ -628,6 +837,131 @@ router.get("/purchase-orders/:id", authenticate, async (req, res, next) => {
     );
 
     res.json({ success: true, data: { ...po, items: items || [] } });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// POST /purchase-orders/:id/cancel - Cancel Purchase Order & rollback inventory
+router.post("/purchase-orders/:id/cancel", authenticate, authorize("admin", "manager"), async (req, res, next) => {
+  try {
+    const currentStore = req.store_id || req.user?.store_id || 'store-1';
+    const { reason } = req.body || {};
+
+    const po = await db.get(
+      `SELECT * FROM purchase_orders WHERE (id = ? OR po_number = ?) AND (store_id = ? OR store_id IS NULL OR store_id = '')`,
+      [req.params.id, req.params.id, currentStore]
+    );
+
+    if (!po) {
+      return res.status(404).json({ success: false, error: { message: "ไม่พบข้อมูลใบสั่งซื้อ/รับสินค้า (PO)" } });
+    }
+
+    if (po.status === 'cancelled' || (po.remark && po.remark.includes('[ยกเลิกเมื่อ'))) {
+      return res.status(400).json({ success: false, error: { message: "ใบรับสินค้านี้ถูกยกเลิกไปแล้ว" } });
+    }
+
+    if (po.status === 'รออนุมัติ' || po.status === 'pending_approval') {
+      return res.status(400).json({ success: false, error: { message: "ใบรับสินค้านี้อยู่ระหว่างรอการอนุมัติผ่าน LINE" } });
+    }
+
+    const lineRequired = await isLineApprovalRequired(currentStore);
+
+    if (lineRequired) {
+      // 1. Update PO status to 'รออนุมัติ'
+      try { await db.run("ALTER TABLE purchase_orders ADD COLUMN status TEXT DEFAULT 'completed'"); } catch (_) {}
+      try { await db.run("ALTER TABLE purchase_orders ADD COLUMN cancel_requested_at TEXT"); } catch (_) {}
+      try { await db.run("ALTER TABLE purchase_orders ADD COLUMN cancel_requester_name TEXT"); } catch (_) {}
+
+      const requesterName = req.user?.full_name || req.user?.username || 'Staff';
+      await db.run(
+        "UPDATE purchase_orders SET status = 'รออนุมัติ', remark = COALESCE(remark || ' | ', '') || ?, cancel_requested_at = datetime('now', '+7 hours'), cancel_requester_name = ? WHERE id = ?",
+        [`[รออนุมัติยกเลิก: ${reason}]`, requesterName, po.id]
+      );
+
+      let approval = await db.get(
+        "SELECT * FROM approval_requests WHERE document_id = ? AND store_id = ? AND status = 'PENDING'",
+        [po.po_number || po.id, currentStore]
+      );
+
+      if (!approval) {
+        const poItems = await db.all(`
+          SELECT poi.quantity, poi.unit_cost_price, poi.total_price,
+                 COALESCE(p.name, i.name, 'สินค้า/วัตถุดิบ') as name,
+                 COALESCE(p.unit, i.unit, 'หน่วย') as unit
+          FROM purchase_order_items poi
+          LEFT JOIN products p ON poi.product_id = p.id
+          LEFT JOIN ingredients i ON poi.product_id = i.id
+          WHERE poi.po_id = ?
+        `, [po.id]);
+
+        const approvalPayload = {
+          items: poItems,
+          po_number: po.po_number,
+          supplier_name: po.supplier_name,
+          received_date: po.received_date,
+          total_amount: po.total_amount
+        };
+
+        approval = {
+          id: uuidv4(),
+          store_id: currentStore,
+          document_type: 'po_cancel',
+          document_id: po.po_number || po.id,
+          amount: parseFloat(po.total_amount) || 0,
+          reason: reason || 'ขอยกเลิกใบสั่งซื้อ/รับสินค้า (PO)',
+          requester_id: req.user.id,
+          requester_name: req.user.full_name || req.user.username || 'Staff',
+          status: 'PENDING',
+          payload: JSON.stringify(approvalPayload)
+        };
+
+        await db.run(`
+          INSERT INTO approval_requests
+          (id, store_id, document_type, document_id, amount, reason, requester_id, requester_name, status, payload)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
+        `, [
+          approval.id,
+          approval.store_id,
+          approval.document_type,
+          approval.document_id,
+          approval.amount,
+          approval.reason,
+          approval.requester_id,
+          approval.requester_name,
+          approval.payload
+        ]);
+
+        try {
+          await lineService.sendApprovalRequestNotification(approval);
+        } catch (lineErr) {
+          console.warn('[PO Cancel] Failed to push notification to LINE:', lineErr.message);
+        }
+      }
+
+      return res.json({
+        success: true,
+        requires_approval: true,
+        message: `ส่งคำขออนุมัติยกเลิกใบรับสินค้า #${po.po_number} ไปยัง LINE เรียบร้อยแล้ว`,
+        data: approval
+      });
+    }
+
+    // Direct execution
+    const result = await cancelPurchaseOrder({
+      poId: po.id,
+      storeId: currentStore,
+      requesterId: req.user.id,
+      approverName: req.user.full_name || req.user.username || 'Admin/Manager',
+      reason
+    });
+
+    res.json({
+      success: true,
+      requires_approval: false,
+      message: result.message || "ยกเลิกใบสั่งซื้อและหักคืนยอดสต็อกเรียบร้อยแล้ว",
+      data: result
+    });
   } catch (e) {
     next(e);
   }

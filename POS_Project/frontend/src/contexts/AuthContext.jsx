@@ -39,8 +39,8 @@ export function AuthProvider({ children }) {
 
   const [currentStore, setCurrentStore] = useState(null);
 
-  const login = async (username, password) => {
-    const res = await api.post('/auth/login', { username, password });
+  const login = async (username, password, extraPayload = {}) => {
+    const res = await api.post('/auth/login', { username, password, ...extraPayload });
     const { token, user: userData, stores: userStores } = res.data.data;
     
     localStorage.setItem('pos_token', token);
@@ -53,8 +53,8 @@ export function AuthProvider({ children }) {
     return { userData, userStores };
   };
 
-  const pinLogin = async (pin) => {
-    const res = await api.post('/auth/pin-login', { pin });
+  const pinLogin = async (pin, extraPayload = {}) => {
+    const res = await api.post('/auth/pin-login', { pin, ...extraPayload });
     const { token, user: userData, stores: userStores } = res.data.data;
     
     localStorage.setItem('pos_token', token);
@@ -154,7 +154,11 @@ export function AuthProvider({ children }) {
     if (user) {
       refreshUser();
     }
-  }, []);
+    // Automatically register and touch device on app startup
+    api.post('/auth/ping-device', {
+      user_name: user?.full_name || user?.username || null
+    }).catch(() => {});
+  }, [user?.id]);
 
   useEffect(() => {
     if (user && activeStoreId) {

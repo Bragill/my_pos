@@ -179,6 +179,30 @@ router.delete("/roles/:id", authenticate, authorize("admin"), async (req, res, n
   } catch (err) { next(err); }
 });
 
+// Helper to check for duplicate PIN across all active accounts
+async function validateAndCheckDuplicatePin(pinStr, excludeUserId = null) {
+  if (!pinStr) return;
+  const pin = String(pinStr).trim();
+  if (!/^\d{6}$/.test(pin)) {
+    throw new AppError("รหัส PIN ต้องเป็นตัวเลข 6 หลักเท่านั้น", 400);
+  }
+
+  const query = excludeUserId
+    ? "SELECT id, username, full_name, pin_code FROM users WHERE status = 'active' AND pin_code IS NOT NULL AND id != ?"
+    : "SELECT id, username, full_name, pin_code FROM users WHERE status = 'active' AND pin_code IS NOT NULL";
+  const params = excludeUserId ? [excludeUserId] : [];
+  const otherUsers = await db.all(query, params);
+
+  for (const other of otherUsers) {
+    if (other.pin_code) {
+      const match = await bcrypt.compare(pin, other.pin_code);
+      if (match) {
+        throw new AppError(`รหัส PIN 6 หลักนี้ถูกใช้งานแล้วโดยผู้ใช้ "${other.username}" (${other.full_name}) กรุณาเลือกรหัส PIN อื่น`, 400);
+      }
+    }
+  }
+}
+
 // CREATE user
 router.post("/", authenticate, authorize("admin"), async (req, res, next) => {
   try {
@@ -186,12 +210,18 @@ router.post("/", authenticate, authorize("admin"), async (req, res, next) => {
     if (!username || !password || !full_name || !role_id) return next(new AppError("กรุณากรอกข้อมูลให้ครบถ้วน", 400));
     const existing = await db.get("SELECT id FROM users WHERE username = ?", [username]);
     if (existing) return next(new AppError("ชื่อผู้ใช้นี้มีอยู่แล้ว", 400));
+
+    // Validate 6-digit and check duplicate PIN
+    if (pin_code) {
+      await validateAndCheckDuplicatePin(pin_code);
+    }
+
     const id = uuidv4();
     const hash = await bcrypt.hash(password, 12);
     // Hash PIN if present
     let hashedPin = null;
     if (pin_code) {
-        hashedPin = await bcrypt.hash(String(pin_code), 10);
+      hashedPin = await bcrypt.hash(String(pin_code), 10);
     }
     await db.run("INSERT INTO users (id, username, password_hash, pin_code, full_name, role_id) VALUES (?,?,?,?,?,?)", [id, username, hash, hashedPin, full_name, role_id]);
     const user = await db.get("SELECT u.id, u.username, u.full_name, u.pin_code, u.status, r.name as role_name, u.created_at FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = ?", [id]);
@@ -206,9 +236,13 @@ router.put("/:id", authenticate, authorize("admin"), async (req, res, next) => {
     const user = await db.get("SELECT id FROM users WHERE id = ?", [req.params.id]);
     if (!user) return next(new AppError("ไม่พบผู้ใช้งาน", 404));
     
+    // Validate 6-digit and check duplicate PIN if provided and changed
     let hashedPin = undefined;
-    if (pin_code !== undefined) {
-        hashedPin = pin_code ? await bcrypt.hash(String(pin_code), 10) : null;
+    if (pin_code !== undefined && pin_code !== null && String(pin_code).trim() !== '') {
+      await validateAndCheckDuplicatePin(pin_code, req.params.id);
+      hashedPin = await bcrypt.hash(String(pin_code), 10);
+    } else if (pin_code === null || pin_code === '') {
+      hashedPin = null;
     }
 
     if (password) {

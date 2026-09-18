@@ -16,13 +16,13 @@ export default function Pagination({
 }) {
   if (total === 0) return null;
   return (
-    <div className="flex flex-col sm:flex-row items-center justify-between gap-2 py-3">
-      <div className="flex items-center gap-2 text-xs text-gray-500">
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-2 py-3 text-gray-500 dark:text-slate-400">
+      <div className="flex items-center gap-2 text-xs">
         <label className="font-medium whitespace-nowrap">แสดงหน้าละ</label>
         <select
           value={perPage}
           onChange={(e) => onPerPageChange(parseInt(e.target.value, 10))}
-          className="bg-white border border-gray-200 rounded-xl px-2 py-1.5 text-xs text-gray-800 font-bold focus:outline-none focus:border-indigo-500"
+          className="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl px-2 py-1.5 text-xs text-gray-800 dark:text-slate-200 font-bold focus:outline-none focus:border-indigo-500"
         >
           {perPageOptions.map((n) => (
             <option key={n} value={n}>{n} รายการ</option>
@@ -37,18 +37,18 @@ export default function Pagination({
           type="button"
           onClick={() => onPageChange(Math.max(1, page - 1))}
           disabled={page <= 1}
-          className="px-3 py-1.5 rounded-xl border border-gray-200 text-gray-600 text-xs font-bold hover:bg-gray-50 disabled:opacity-40 transition-all"
+          className="px-3 py-1.5 rounded-xl border border-gray-200 dark:border-slate-700 text-gray-600 dark:text-slate-300 text-xs font-bold bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 disabled:opacity-40 transition-all cursor-pointer"
         >
           ‹ ก่อนหน้า
         </button>
-        <span className="text-xs text-gray-500 font-medium whitespace-nowrap">
+        <span className="text-xs font-medium whitespace-nowrap">
           หน้า {page} / {totalPages}
         </span>
         <button
           type="button"
           onClick={() => onPageChange(Math.min(totalPages, page + 1))}
           disabled={page >= totalPages}
-          className="px-3 py-1.5 rounded-xl border border-gray-200 text-gray-600 text-xs font-bold hover:bg-gray-50 disabled:opacity-40 transition-all"
+          className="px-3 py-1.5 rounded-xl border border-gray-200 dark:border-slate-700 text-gray-600 dark:text-slate-300 text-xs font-bold bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 disabled:opacity-40 transition-all cursor-pointer"
         >
           ถัดไป ›
         </button>

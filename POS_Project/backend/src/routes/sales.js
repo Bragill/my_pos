@@ -3,6 +3,8 @@ const db = require("../database/dbHelper");
 const { authenticate, authorize } = require("../middleware/auth");
 const { AppError } = require("../middleware/errorHandler");
 const { v4: uuidv4 } = require("uuid");
+const { isLineApprovalRequired, cancelSaleOrder } = require("../services/cancellationService");
+const lineService = require("../services/lineService");
 const router = express.Router();
 
 /**
@@ -23,10 +25,20 @@ router.get("/history", authenticate, async (req, res, next) => {
 
     let sql = `
       SELECT o.*, u.full_name as cashier_name,
-             COALESCE(c.name, o.debtor_name) as customer_display_name
+             COALESCE(c.name, o.debtor_name) as customer_display_name,
+             ar.status as ar_status,
+             ar.created_at as ar_cancel_requested_at,
+             ar.requester_name as ar_cancel_requester_name,
+             ar.responded_at as ar_approved_at,
+             ar.approver_name as ar_approver_name
       FROM orders o
       LEFT JOIN users u ON o.user_id = u.id
       LEFT JOIN customers c ON o.customer_id = c.id
+      LEFT JOIN (
+        SELECT document_id, store_id, MAX(created_at) as created_at, MAX(responded_at) as responded_at, MAX(approver_name) as approver_name, MAX(requester_name) as requester_name, MAX(status) as status
+        FROM approval_requests
+        GROUP BY document_id, store_id
+      ) ar ON (o.order_no = ar.document_id OR o.id = ar.document_id) AND o.store_id = ar.store_id
       WHERE o.store_id = ?
     `;
     const params = [req.store_id];
@@ -60,6 +72,25 @@ router.get("/history", authenticate, async (req, res, next) => {
     params.push(parseInt(limit), (parseInt(page) - 1) * parseInt(limit));
 
     const rows = await db.all(sql, params);
+    const processedRows = (rows || []).map(row => {
+      let currentStatus = row.status;
+      if ((currentStatus === 'รออนุมัติ' || currentStatus === 'pending_approval') && row.ar_status === 'APPROVED') {
+        currentStatus = 'ยกเลิกแล้ว';
+        // Auto heal DB asynchronously
+        db.run(
+          "UPDATE orders SET status = 'ยกเลิกแล้ว', approver_name = ?, approved_at = COALESCE(?, datetime('now', '+7 hours')), updated_at = datetime('now', '+7 hours') WHERE id = ?",
+          [row.ar_approver_name || 'ผู้จัดการ', row.ar_approved_at, row.id]
+        ).catch(() => {});
+      }
+      return {
+        ...row,
+        status: currentStatus,
+        cancel_requested_at: row.cancel_requested_at || row.ar_cancel_requested_at || null,
+        cancel_requester_name: row.cancel_requester_name || row.ar_cancel_requester_name || null,
+        approved_at: row.approved_at || row.ar_approved_at || null,
+        approver_name: row.approver_name || row.ar_approver_name || null
+      };
+    });
     
     // Total count for pagination
     let countSql = "SELECT COUNT(*) as count FROM orders WHERE store_id = ?";
@@ -70,7 +101,7 @@ router.get("/history", authenticate, async (req, res, next) => {
 
     res.json({ 
       success: true, 
-      data: rows, 
+      data: processedRows, 
       pagination: {
         total: totalCount,
         page: parseInt(page), 
@@ -96,6 +127,28 @@ router.get("/:id", authenticate, async (req, res, next) => {
     `, [req.params.id, req.store_id]);
 
     if (!order) return next(new AppError("ไม่พบรายการขาย", 404));
+
+    // Fallback cancel and approver info from approval_requests if not populated on orders
+    const approval = await db.get(`
+      SELECT status as approval_status, created_at as cancel_requested_at, responded_at as approval_responded_at, requester_name, approver_name
+      FROM approval_requests
+      WHERE (document_id = ? OR document_id = ?) AND store_id = ?
+      ORDER BY created_at DESC LIMIT 1
+    `, [order.order_no, order.id, req.store_id]);
+
+    if (approval) {
+      if ((order.status === 'รออนุมัติ' || order.status === 'pending_approval') && approval.approval_status === 'APPROVED') {
+        order.status = 'ยกเลิกแล้ว';
+        db.run(
+          "UPDATE orders SET status = 'ยกเลิกแล้ว', approver_name = ?, approved_at = COALESCE(?, datetime('now', '+7 hours')), updated_at = datetime('now', '+7 hours') WHERE id = ?",
+          [approval.approver_name || 'ผู้จัดการ', approval.approval_responded_at, order.id]
+        ).catch(() => {});
+      }
+      if (!order.cancel_requested_at) order.cancel_requested_at = approval.cancel_requested_at;
+      if (!order.cancel_requester_name) order.cancel_requester_name = approval.requester_name;
+      if (!order.approved_at) order.approved_at = approval.approval_responded_at;
+      if (!order.approver_name) order.approver_name = approval.approver_name;
+    }
 
     const items = await db.all(`
       SELECT oi.*, p.name as product_name, p.sku, p.barcode
@@ -125,42 +178,112 @@ router.post("/:id/void", authenticate, authorize("admin", "manager"), async (req
     const { reason } = req.body;
     if (!reason) return next(new AppError("กรุณาระบุเหตุผลในการยกเลิก", 400));
 
-    const order = await db.get("SELECT * FROM orders WHERE id = ? AND store_id = ?", [req.params.id, req.store_id]);
+    const order = await db.get("SELECT * FROM orders WHERE (id = ? OR order_no = ?) AND store_id = ?", [req.params.id, req.params.id, req.store_id]);
     if (!order) return next(new AppError("ไม่พบรายการขาย", 404));
-    if (order.status === "ยกเลิกแล้ว") return next(new AppError("รายการนี้ถูกยกเลิกไปแล้ว", 400));
-
-    // Check if shift is closed (Technical Constraint)
-    const shift = await db.get("SELECT * FROM shifts WHERE user_id = ? AND store_id = ? AND status = 'open'", [order.user_id, req.store_id]);
-    // If order was made in a previous shift, we might still allow admin to void it, 
-    // but the requirement says "Prevent editing if the accounting period/shift is already closed".
-    // For simplicity, we assume an active shift is needed or role is admin.
-    if (!shift && req.user.role !== 'admin') {
-      return next(new AppError("ไม่สามารถแก้ไขได้เนื่องจากรอบการขายถูกปิดไปแล้ว", 403));
+    if (order.status === "ยกเลิกแล้ว" || order.status === "refunded" || order.status === "voided") {
+      return next(new AppError("รายการนี้ถูกยกเลิกไปแล้ว", 400));
+    }
+    if (order.status === "รออนุมัติ" || order.status === "pending_approval") {
+      return next(new AppError("รายการนี้อยู่ระหว่างรอการอนุมัติผ่าน LINE", 400));
     }
 
-    const items = await db.all("SELECT * FROM order_items WHERE order_id = ?", [order.id]);
+    // Check if LINE approval is required for this store
+    const lineRequired = await isLineApprovalRequired(req.store_id);
 
-    // 1. Update order status
-    await db.run("UPDATE orders SET status = 'ยกเลิกแล้ว', updated_at = datetime('now', '+7 hours') WHERE id = ?", [order.id]);
+    if (lineRequired) {
+      try { await db.run("ALTER TABLE orders ADD COLUMN cancel_requested_at TEXT"); } catch (_) {}
+      try { await db.run("ALTER TABLE orders ADD COLUMN cancel_requester_name TEXT"); } catch (_) {}
 
-    // 2. Return inventory
-    for (const item of items) {
-      await db.run("UPDATE inventory SET quantity = quantity + ?, updated_at = datetime('now', '+7 hours') WHERE product_id = ? AND store_id = ?", 
-        [item.quantity, item.product_id, req.store_id]);
-      
-      await db.run(`
-        INSERT INTO stock_transactions (id, product_id, user_id, store_id, type, quantity, remark, created_at)
-        VALUES (?, ?, ?, ?, 'return', ?, ?, datetime('now', '+7 hours'))
-      `, [uuidv4(), item.product_id, req.user.id, req.store_id, item.quantity, `ยกเลิกรายการขาย ${order.order_no}: ${reason}`]);
+      const requesterName = req.user.full_name || req.user.username || 'Staff';
+      // 1. Update order status to 'รออนุมัติ'
+      await db.run(
+        "UPDATE orders SET status = 'รออนุมัติ', remark = COALESCE(remark || ' | ', '') || ?, cancel_requested_at = datetime('now', '+7 hours'), cancel_requester_name = ?, updated_at = datetime('now', '+7 hours') WHERE id = ?",
+        [`[รออนุมัติยกเลิก: ${reason}]`, requesterName, order.id]
+      );
+
+      // Check if there is already a pending request
+      let approval = await db.get(
+        "SELECT * FROM approval_requests WHERE document_id = ? AND store_id = ? AND status = 'PENDING'",
+        [order.order_no || order.id, req.store_id]
+      );
+
+      if (!approval) {
+        const orderItems = await db.all(`
+          SELECT oi.quantity, oi.unit_price, oi.total_price,
+                 COALESCE(p.name, 'สินค้า') as name,
+                 COALESCE(p.unit, 'ชิ้น') as unit
+          FROM order_items oi
+          LEFT JOIN products p ON oi.product_id = p.id
+          WHERE oi.order_id = ?
+        `, [order.id]);
+
+        const approvalPayload = {
+          items: orderItems,
+          order_no: order.order_no,
+          payment_method: order.payment_method,
+          debtor_name: order.debtor_name,
+          total_amount: order.total_amount
+        };
+
+        approval = {
+          id: uuidv4(),
+          store_id: req.store_id,
+          document_type: 'sale_void',
+          document_id: order.order_no || order.id,
+          amount: parseFloat(order.total_amount) || 0,
+          reason: reason || 'ขอยกเลิกบิลขาย',
+          requester_id: req.user.id,
+          requester_name: req.user.full_name || req.user.username || 'Staff',
+          status: 'PENDING',
+          payload: JSON.stringify(approvalPayload)
+        };
+
+        await db.run(`
+          INSERT INTO approval_requests
+          (id, store_id, document_type, document_id, amount, reason, requester_id, requester_name, status, payload)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
+        `, [
+          approval.id,
+          approval.store_id,
+          approval.document_type,
+          approval.document_id,
+          approval.amount,
+          approval.reason,
+          approval.requester_id,
+          approval.requester_name,
+          approval.payload
+        ]);
+
+        try {
+          await lineService.sendApprovalRequestNotification(approval);
+        } catch (lineErr) {
+          console.warn('[Sales Void] Failed to push notification to LINE:', lineErr.message);
+        }
+      }
+
+      return res.json({
+        success: true,
+        requires_approval: true,
+        message: 'ส่งคำขออนุมัติการยกเลิกบิลไปยัง LINE เรียบร้อยแล้ว กรุณารอผู้จัดการอนุมัติ',
+        data: approval
+      });
     }
 
-    // 3. Log the action
-    await db.run(`
-      INSERT INTO sales_transaction_logs (id, order_id, user_id, action_type, original_value, reason, created_at)
-      VALUES (?, ?, ?, 'void', ?, ?, datetime('now', '+7 hours'))
-    `, [uuidv4(), order.id, req.user.id, JSON.stringify(order), reason]);
+    // Direct execution if LINE is not configured for this store
+    const result = await cancelSaleOrder({
+      orderId: order.id,
+      storeId: req.store_id,
+      requesterId: req.user.id,
+      approverName: req.user.full_name || req.user.username || 'Admin/Manager',
+      reason
+    });
 
-    res.json({ success: true, message: "ยกเลิกรายการขายและคืนสต๊อกเรียบร้อยแล้ว" });
+    res.json({
+      success: true,
+      requires_approval: false,
+      message: result.message || "ยกเลิกรายการขายและคืนสต๊อกเรียบร้อยแล้ว",
+      data: result
+    });
   } catch (err) { next(err); }
 });
 

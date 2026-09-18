@@ -8,8 +8,12 @@ import ScanIcon from '../components/ScanIcon';
 import { formatDate } from '../utils/format';
 import Pagination from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
+import { useAuth } from '../contexts/AuthContext';
+import { canMaintainModule } from '../utils/permissions';
 
 export default function OcrPage() {
+    const { user } = useAuth();
+    const canMaintain = canMaintainModule(user, 'ocr');
     const [receipts, setReceipts] = useState([]);
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
@@ -80,6 +84,7 @@ export default function OcrPage() {
     }, [receipts, selectedReceipt]);
 
     const handleFileUpload = async (e) => {
+        if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์อัปโหลดใบเสร็จ');
         const file = e.target.files[0];
         if (!file) return;
 
@@ -107,6 +112,7 @@ export default function OcrPage() {
     };
 
     const handleEditStart = () => {
+        if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์แก้ไขรายการ');
         setEditingItems(selectedReceipt.items.map(item => ({ ...item })));
         setIsEditing(true);
     };
@@ -144,6 +150,7 @@ export default function OcrPage() {
     };
 
     const handleSaveEdits = async () => {
+        if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์แก้ไขรายการ');
         setLoading(true);
         try {
             // Sync product name with stock raw_name where they differ
@@ -173,6 +180,7 @@ export default function OcrPage() {
     };
 
     const handleDelete = async (id) => {
+        if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์ลบข้อมูลใบเสร็จ');
         if (!window.confirm('คุณต้องการลบข้อมูลใบเสร็จนี้และรูปภาพใน R2 ใช่หรือไม่?')) return;
         
         try {
@@ -191,6 +199,7 @@ export default function OcrPage() {
     };
 
     const handleAddToStock = async () => {
+        if (!canMaintain) return toast.error('คุณไม่มีสิทธิ์เพิ่มสินค้าเข้าสต็อก');
         if (!selectedReceipt) return;
         
         // Check if already fully updated
@@ -447,25 +456,31 @@ export default function OcrPage() {
                     <p className="text-gray-500 text-sm">ถ่ายรูปหรืออัปโหลดใบเสร็จเพื่อเพิ่มสต๊อกอัตโนมัติ</p>
                 </div>
                 
-                <div className="flex gap-2">
-                    {/* Camera Capture (Mobile Optimized) */}
-                    <label className={`
-                        flex items-center justify-center gap-2 px-4 py-3 rounded-2xl font-bold transition-all cursor-pointer shadow-lg
-                        ${uploading ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 text-white hover:scale-105 active:scale-95'}
-                    `}>
-                        {uploading ? '⏳...' : '📸 ถ่ายรูป'}
-                        <input type="file" className="hidden" accept="image/*" capture="environment" onChange={handleFileUpload} disabled={uploading} />
-                    </label>
+                {canMaintain ? (
+                    <div className="flex gap-2">
+                        {/* Camera Capture (Mobile Optimized) */}
+                        <label className={`
+                            flex items-center justify-center gap-2 px-4 py-3 rounded-2xl font-bold transition-all cursor-pointer shadow-lg
+                            ${uploading ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 text-white hover:scale-105 active:scale-95'}
+                        `}>
+                            {uploading ? '⏳...' : '📸 ถ่ายรูป'}
+                            <input type="file" className="hidden" accept="image/*" capture="environment" onChange={handleFileUpload} disabled={uploading} />
+                        </label>
 
-                    {/* File Upload */}
-                    <label className={`
-                        flex items-center justify-center gap-2 px-4 py-3 rounded-2xl font-bold transition-all cursor-pointer shadow-lg
-                        ${uploading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:scale-105 active:scale-95'}
-                    `}>
-                        {uploading ? '⏳...' : '📁 เลือกไฟล์'}
-                        <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} disabled={uploading} />
-                    </label>
-                </div>
+                        {/* File Upload */}
+                        <label className={`
+                            flex items-center justify-center gap-2 px-4 py-3 rounded-2xl font-bold transition-all cursor-pointer shadow-lg
+                            ${uploading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:scale-105 active:scale-95'}
+                        `}>
+                            {uploading ? '⏳...' : '📁 เลือกไฟล์'}
+                            <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} disabled={uploading} />
+                        </label>
+                    </div>
+                ) : (
+                    <span className="px-3 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold text-xs self-start md:self-center">
+                        👁️ โหมดดูข้อมูลเท่านั้น
+                    </span>
+                )}
             </header>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -528,10 +543,10 @@ export default function OcrPage() {
                                     <p className="text-xs text-gray-500">{selectedReceipt.id}</p>
                                 </div>
                                 <div className="flex gap-2">
-                                    {!isEditing && selectedReceipt.status !== 'processing' && (
+                                    {canMaintain && !isEditing && selectedReceipt.status !== 'processing' && (
                                         <button onClick={() => handleDelete(selectedReceipt.id)} className="btn-ghost text-red-600 border-red-100 hover:bg-red-50 text-sm py-1">🗑️ ลบ</button>
                                     )}
-                                    {!isEditing && selectedReceipt.status === 'completed' && (
+                                    {canMaintain && !isEditing && selectedReceipt.status === 'completed' && (
                                         <button onClick={handleEditStart} className="btn-ghost text-sm py-1">✏️ แก้ไข</button>
                                     )}
                                     <button onClick={() => setSelectedReceipt(null)} className="text-gray-400 hover:text-gray-600">✕</button>
@@ -687,7 +702,7 @@ export default function OcrPage() {
                                                 </div>
                                             </div>
 
-                                            {selectedReceipt.status === 'completed' && (
+                                            {canMaintain && selectedReceipt.status === 'completed' && (
                                                 <button 
                                                     onClick={handleAddToStock}
                                                     disabled={loading}
