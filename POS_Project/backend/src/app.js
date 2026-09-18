@@ -120,6 +120,7 @@ app.use('/api/recipes', require('./routes/recipes'));
 app.use('/api/line/webhook', require('./routes/lineWebhook'));
 app.use('/api/settings/line', require('./routes/lineSettings'));
 app.use('/api/approvals', require('./routes/approvals'));
+app.use('/api/biometrics', require('./routes/biometrics'));
 
 app.get('/api/health', (req, res) => {
   res.json({

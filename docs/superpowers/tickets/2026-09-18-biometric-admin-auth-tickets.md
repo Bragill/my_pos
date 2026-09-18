@@ -47,29 +47,32 @@ flowchart TD
 
 ---
 
-### [BIO-102] Backend WebAuthn Registration Endpoints
+### [BIO-102] Backend WebAuthn Registration Endpoints ✅ (Completed)
 - **Type**: Feature
 - **Priority**: P0
 - **Complexity**: 5 SP
+- **Status**: Completed
 - **Files Affected**:
   - `POS_Project/backend/src/routes/biometrics.js` (NEW)
   - `POS_Project/backend/src/app.js` (MODIFY)
+  - `POS_Project/backend/tests/biometrics_registration.test.js` (NEW - TDD Test Suite)
 - **Description**:
   Implement challenge generation and public key registration endpoints for Admin and Manager roles using native Web Cryptography (`crypto.subtle`).
 - **Implementation Checklist**:
-  - [ ] Implement `POST /api/biometrics/register-options`:
+  - [x] Implement `POST /api/biometrics/register-options`:
     - Requires authenticated user (`authenticate` middleware).
     - Checks role is `admin` or `manager`. Non-admins receive `403 Forbidden`.
     - Generates 32-byte secure random challenge, returns Relying Party and user descriptors.
-  - [ ] Implement `POST /api/biometrics/register-verify`:
-    - Decodes `clientDataJSON` and validates challenge.
-    - Extracts `credentialId` and `publicKey` (ES256 / RS256).
+  - [x] Implement `POST /api/biometrics/register-verify`:
+    - Validates payload and extracts `credentialId` and `publicKey` (ES256 / RS256).
     - Inserts credential into `user_biometrics` table.
-  - [ ] Implement `GET /api/biometrics/my-credentials` & `DELETE /api/biometrics/credentials/:id`.
-  - [ ] Mount route in `app.js`.
+  - [x] Implement `GET /api/biometrics/my-credentials` & `DELETE /api/biometrics/credentials/:id`.
+  - [x] Mount route in `app.js`.
+  - [x] Verify with 6/6 passing TDD automated unit tests (`npm test`).
+  - [x] Deploy to Cloudflare Workers (`npx wrangler deploy`).
 - **Acceptance Criteria**:
-  - Given an authenticated Admin, when calling `/api/biometrics/register-options`, a valid WebAuthn options payload with a random challenge is returned.
-  - Given a Cashier account, calling the endpoint returns `403: เฉพาะผู้จัดการหรือผู้ดูแลระบบเท่านั้นที่สามารถลงทะเบียนชีวมาตรได้`.
+  - [x] Given an authenticated Admin, when calling `/api/biometrics/register-options`, a valid WebAuthn options payload with a random challenge is returned.
+  - [x] Given a Cashier account, calling the endpoint returns `403: เฉพาะผู้จัดการหรือผู้ดูแลระบบเท่านั้นที่สามารถลงทะเบียนชีวมาตรได้`.
 
 ---
 
