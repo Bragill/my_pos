@@ -86,20 +86,22 @@ flowchart TD
 - **Description**:
   Implement pre-login biometric authentication that validates the cryptographic signature from the hardware enclave, checks the Quick PIN, and enforces device security rules.
 - **Implementation Checklist**:
-  - [ ] Implement `POST /api/biometrics/login-options`:
+  - [x] Implement `POST /api/biometrics/login-options`:
     - Accepts device MAC address in header/body.
     - Validates device security: If `status === 'LOCKED_TEMP'` or `'BLACKLISTED'`, returns 429/403 immediately.
     - Fetches allowed credential IDs for this MAC address belonging to Admin/Manager accounts.
-  - [ ] Implement `POST /api/biometrics/login-verify`:
+  - [x] Implement `POST /api/biometrics/login-verify`:
     - Checks MAC address status again.
     - Validates WebAuthn signature using stored `public_key` with `crypto.subtle.verify`.
     - Validates 4-digit `quick_pin` against user's bcrypt password/PIN hash.
     - On PIN failure: Increments `failed_attempts` on `device_security` (locks device on 5th attempt).
     - On success: Resets `failed_attempts`, updates `last_used_at`, and issues JWT token with assigned stores.
+  - [x] Verify with 6/6 automated TDD tests (`npm test`).
+  - [x] Deploy to Cloudflare Workers (`npx wrangler deploy`).
 - **Acceptance Criteria**:
-  - A valid biometric assertion + correct Quick PIN logs in and returns a valid JWT token.
-  - An invalid signature or incorrect PIN is rejected with an error and increments device failed attempts.
-  - A device in `LOCKED_TEMP` is rejected with 429 and countdown timer.
+  - [x] A valid biometric assertion + correct Quick PIN logs in and returns a valid JWT token.
+  - [x] An invalid signature or incorrect PIN is rejected with an error and increments device failed attempts.
+  - [x] A device in `LOCKED_TEMP` is rejected with 429 and countdown timer.
 
 ---
 
