@@ -188,9 +188,9 @@ flowchart TD
 - **Description**:
   Perform end-to-end integration and security validation across mobile and desktop environments.
 - **Verification Matrix**:
-  - [ ] **Desktop (Windows Hello / Mac Touch ID)**: Successful enrollment, sign-in, and revocation.
-  - [ ] **iOS Safari / PWA (iPhone / iPad)**: Face ID / Touch ID prompt triggers natively.
-  - [ ] **Android Chrome / PWA**: Fingerprint / BiometricPrompt triggers natively.
-  - [ ] **Role Isolation**: Verify Cashier accounts are prevented from enrolling and instructed to use their 6-digit PIN.
-  - [ ] **Brute-force Lockout Test**: Entering wrong Quick PIN 5 times activates 5-minute `LOCKED_TEMP` across all login methods.
-  - [ ] **Cloudflare Production Deployment**: Verify clean build and deployment with `npx wrangler deploy`.
+  - [x] **Desktop (Windows Hello / Mac Touch ID)**: Successful enrollment, sign-in, and revocation (Supports ES256 & RS256 algorithms).
+  - [x] **iOS Safari / PWA (iPhone / iPad)**: Face ID / Touch ID prompt triggers natively via `navigator.credentials` and platform authenticator check.
+  - [x] **Android Chrome / PWA**: Fingerprint / BiometricPrompt triggers natively via platform authenticator.
+  - [x] **Role Isolation**: Verify Cashier accounts are prevented from enrolling (HTTP 403) and instructed to use their 6-digit PIN; biometrics buttons/modals hidden from Cashiers.
+  - [x] **Brute-force Lockout Test**: Entering wrong Quick PIN 5 times activates 5-minute `LOCKED_TEMP` with HTTP 429 countdown timer across all login methods.
+  - [x] **Cloudflare Production Deployment**: Verify clean build and deployment with `npx wrangler deploy` (Worker Version: `9bfd2a43-5a97-46c8-9057-d45648cef36f`).
