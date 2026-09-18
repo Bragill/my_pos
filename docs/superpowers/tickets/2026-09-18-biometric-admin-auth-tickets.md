@@ -137,17 +137,18 @@ flowchart TD
 - **Description**:
   Create a standalone modal accessible from the top navbar avatar to manage biometrics, plus a subtle prompt for Admin/Manager after login on an unregistered device.
 - **Implementation Checklist**:
-  - [ ] Create `BiometricsProfileModal.jsx`:
+  - [x] Create `BiometricsProfileModal.jsx`:
     - Shows device capability status (supported vs unsupported).
     - Lists active enrolled credentials with Device Name, Enrolled Date, and Delete action.
     - One-click button: `➕ เปิดใช้งาน Face ID / ลายนิ้วมือ บนเครื่องนี้`.
-  - [ ] Connect modal trigger to user avatar / profile button in `Layout.jsx`.
-  - [ ] Implement post-login prompt:
+  - [x] Connect modal trigger to user avatar / profile button in `Layout.jsx` and mobile drawer.
+  - [x] Implement post-login prompt:
     - If user is Admin/Manager and current device is not yet registered, display a toast/banner:
       *"ต้องการเปิดใช้งาน Face ID / ลายนิ้วมือ สำหรับ [ชื่อ] บนเครื่องนี้หรือไม่?"*
+  - [x] Verified with production frontend build (`npm run build`).
 - **Acceptance Criteria**:
-  - Admin/Manager can open the modal, see registered devices, register the current device, or revoke older devices.
-  - Cashier users do not see biometric enrollment options.
+  - [x] Admin/Manager can open the modal, see registered devices, register the current device, or revoke older devices.
+  - [x] Cashier users do not see biometric enrollment options.
 
 ---
 

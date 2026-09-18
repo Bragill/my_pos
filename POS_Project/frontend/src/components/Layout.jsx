@@ -7,6 +7,10 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import { canViewModule } from '../utils/permissions';
 import NetworkStatusIndicator, { OfflineTopBanner } from './NetworkStatusIndicator';
+import BiometricsProfileModal from './BiometricsProfileModal';
+import { isBiometricsAvailable } from '../utils/webAuthnHelper';
+import { getDeviceMacAddress } from '../utils/deviceFingerprint';
+import { biometricsAPI } from '../services/api';
 
 const navItems = [
   { path: '/pos', label: 'หน้าขาย', icon: '🛒', moduleKey: 'pos', roles: ['admin', 'manager', 'cashier'] },
@@ -72,7 +76,7 @@ function StoreSwitcher({ stores, activeStoreId, onSwitch }) {
   );
 }
 
-function UserMenu({ user, onLogout }) {
+function UserMenu({ user, onLogout, onOpenBiometrics }) {
   const [open, setOpen] = useState(false);
   const [editModal, setEditModal] = useState(false);
   const [form, setForm] = useState({ full_name: '', current_password: '', new_password: '', confirm_password: '' });
@@ -153,6 +157,14 @@ function UserMenu({ user, onLogout }) {
                 className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-purple-50 transition-colors text-left">
                 <span className="text-base">✏️</span> แก้ไขข้อมูลส่วนตัว
               </button>
+              {(user?.role === 'admin' || user?.role === 'manager') && (
+                <button
+                  onClick={() => { setOpen(false); onOpenBiometrics(); }}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-indigo-700 hover:bg-indigo-50 transition-colors text-left font-medium"
+                >
+                  <span className="text-base">🧬</span> จัดการ Face ID / ลายนิ้วมือ
+                </button>
+              )}
               <div className="border-t border-gray-100" />
               <button onClick={() => { setOpen(false); onLogout(); }}
                 className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition-colors text-left">
@@ -199,7 +211,7 @@ function UserMenu({ user, onLogout }) {
   );
 }
 
-function HamburgerMenu({ navItems, user, onLogout }) {
+function HamburgerMenu({ navItems, user, onLogout, onOpenBiometrics }) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef(null);
   const location = useLocation();
@@ -276,6 +288,19 @@ function HamburgerMenu({ navItems, user, onLogout }) {
               ))}
             </nav>
 
+            {/* Biometrics Profile Option (Admin / Manager only) */}
+            {(user?.role === 'admin' || user?.role === 'manager') && (
+              <div className="px-3 pb-2">
+                <button
+                  onClick={() => { setIsOpen(false); onOpenBiometrics(); }}
+                  className="w-full flex items-center gap-4 px-4 py-3 rounded-2xl bg-indigo-50/70 hover:bg-indigo-100 text-indigo-800 transition-all font-semibold text-left text-sm"
+                >
+                  <span className="text-xl">🧬</span>
+                  <span>Face ID / ลายนิ้วมือ</span>
+                </button>
+              </div>
+            )}
+
             {/* Footer / Logout */}
             <div className="p-4 border-t border-gray-100 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
               <button 
@@ -316,6 +341,40 @@ export default function Layout() {
     }
     return item.roles.includes(user.role);
   });
+
+  const [showBiometricsModal, setShowBiometricsModal] = useState(false);
+  const [biometricsBannerPrompt, setBiometricsBannerPrompt] = useState(null);
+
+  // Subtle post-login prompt for Admin/Manager if device has biometrics capability but isn't enrolled yet
+  useEffect(() => {
+    if (!user || (user.role !== 'admin' && user.role !== 'manager')) return;
+    const dismissed = sessionStorage.getItem('pos_bio_prompt_dismissed');
+    if (dismissed) return;
+
+    let isMounted = true;
+    (async () => {
+      try {
+        const available = await isBiometricsAvailable();
+        if (!available || !isMounted) return;
+
+        const currentMac = getDeviceMacAddress();
+        const res = await biometricsAPI.getMyCredentials();
+        if (res.data?.success && isMounted) {
+          const credentials = res.data.credentials || [];
+          const isRegistered = credentials.some((c) => c.mac_address === currentMac);
+          if (!isRegistered) {
+            setBiometricsBannerPrompt({
+              userName: user.fullName || user.username
+            });
+          }
+        }
+      } catch (_) {}
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
 
   // Detect standalone PWA on mobile (Android and iOS)
   useEffect(() => {
@@ -423,7 +482,12 @@ export default function Layout() {
         
         <div className="flex items-center gap-3">
           {/* Hamburger Menu */}
-          <HamburgerMenu navItems={visibleNav} user={user} onLogout={handleLogout} />
+          <HamburgerMenu
+            navItems={visibleNav}
+            user={user}
+            onLogout={handleLogout}
+            onOpenBiometrics={() => setShowBiometricsModal(true)}
+          />
           
           {/* Logo */}
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -471,13 +535,56 @@ export default function Layout() {
           </button>
 
           {/* User Menu Dropdown */}
-          <UserMenu user={user} onLogout={handleLogout} />
+          <UserMenu
+            user={user}
+            onLogout={handleLogout}
+            onOpenBiometrics={() => setShowBiometricsModal(true)}
+          />
         </div>
       </nav>
+
+      {/* Subtle Post-Login Biometric Registration Prompt Banner */}
+      {biometricsBannerPrompt && (
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-purple-950 text-white px-4 py-2.5 shadow-lg flex items-center justify-between gap-3 text-xs z-30 animate-fade-in border-b border-indigo-500/40">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-base flex-shrink-0">🧬</span>
+            <span className="truncate">
+              ต้องการเปิดใช้งาน <strong>Face ID / ลายนิ้วมือ</strong> สำหรับ <strong>{biometricsBannerPrompt.userName}</strong> บนเครื่องนี้หรือไม่?
+            </span>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={() => {
+                setBiometricsBannerPrompt(null);
+                setShowBiometricsModal(true);
+              }}
+              className="px-3 py-1 bg-white text-indigo-900 font-bold rounded-xl shadow hover:bg-indigo-50 transition-all cursor-pointer active:scale-95"
+            >
+              เปิดใช้งาน
+            </button>
+            <button
+              onClick={() => {
+                sessionStorage.setItem('pos_bio_prompt_dismissed', '1');
+                setBiometricsBannerPrompt(null);
+              }}
+              className="px-2 py-1 text-white/70 hover:text-white transition-colors cursor-pointer"
+            >
+              ไว้คราวหน้า
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 flex flex-col min-h-0 overflow-y-auto relative">
         <Outlet />
       </main>
+
+      {/* Standalone Biometrics Profile Modal (Admin / Manager) */}
+      <BiometricsProfileModal
+        isOpen={showBiometricsModal}
+        onClose={() => setShowBiometricsModal(false)}
+        user={user}
+      />
     </div>
   );
 }
