@@ -27,20 +27,23 @@ flowchart TD
 
 ---
 
-### [BIO-101] Cloudflare D1 Migration for `user_biometrics`
+### [BIO-101] Cloudflare D1 Migration for `user_biometrics` ✅ (Completed)
 - **Type**: Task
 - **Priority**: P0 (Blocker)
 - **Complexity**: 2 SP
+- **Status**: Completed
 - **Files Affected**:
   - `POS_Project/backend/src/database/migrations/005_user_biometrics.sql`
+  - `POS_Project/backend/src/database/migrate.js`
+  - `POS_Project/backend/src/database/schema_d1.sql`
 - **Description**:
   Create and execute table migration in Cloudflare D1 to store platform authenticator credentials bound to users and device MAC addresses.
 - **Implementation Checklist**:
-  - [ ] Write SQL migration with fields: `id`, `user_id`, `mac_address`, `credential_id`, `public_key`, `algorithm`, `counter`, `device_name`, `created_at`, `last_used_at`.
-  - [ ] Add indexes on `user_id`, `credential_id`, and `mac_address`.
-  - [ ] Execute against remote D1 database via `npx wrangler d1 execute pos_system --remote`.
+  - [x] Write SQL migration with fields: `id`, `user_id`, `mac_address`, `credential_id`, `public_key`, `algorithm`, `counter`, `device_name`, `created_at`, `last_used_at`.
+  - [x] Add indexes on `user_id`, `credential_id`, and `mac_address`.
+  - [x] Execute against remote D1 database via `npx wrangler d1 execute pos_system --remote`.
 - **Acceptance Criteria**:
-  - `SELECT name FROM sqlite_master WHERE type='table' AND name='user_biometrics'` returns 1 row in remote D1.
+  - [x] `SELECT name FROM sqlite_master WHERE type='table' AND name='user_biometrics'` returns 1 row in remote D1.
 
 ---
 

@@ -218,3 +218,22 @@ CREATE TABLE ocr_receipt_items (
     total_price REAL
 );
 
+-- 17. user_biometrics
+CREATE TABLE user_biometrics (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mac_address TEXT,
+    credential_id TEXT NOT NULL UNIQUE,
+    public_key TEXT NOT NULL,
+    algorithm TEXT DEFAULT 'ES256',
+    counter INTEGER DEFAULT 0,
+    device_name TEXT,
+    created_at DATETIME DEFAULT (datetime('now', '+7 hours')),
+    last_used_at DATETIME
+);
+
+CREATE INDEX idx_user_biometrics_user ON user_biometrics(user_id);
+CREATE INDEX idx_user_biometrics_cred ON user_biometrics(credential_id);
+CREATE INDEX idx_user_biometrics_mac ON user_biometrics(mac_address);
+
+
