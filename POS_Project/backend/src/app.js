@@ -178,9 +178,7 @@ app.all('/api/internal/init-d1', async (req, res, next) => {
     await db.run("INSERT OR IGNORE INTO users (id, username, password_hash, pin_code, full_name, role_id) VALUES ('usr-admin', 'admin', ?, ?, 'Admin User', 'role-admin')", [hash, pin]);
 
     await db.run("INSERT OR IGNORE INTO stores (id, name, vat_rate) VALUES ('store-1', 'ร้านสาขาหลัก', 7.0)");
-    await db.run("INSERT OR IGNORE INTO stores (id, name, vat_rate) VALUES ('store-2', 'ร้านน้ำเต้าหู้', 7.0)");
     await db.run("INSERT OR IGNORE INTO user_stores (user_id, store_id) VALUES ('usr-admin', 'store-1')");
-    await db.run("INSERT OR IGNORE INTO user_stores (user_id, store_id) VALUES ('usr-admin', 'store-2')");
 
     const catId1 = 'cat-bev';
     const catId2 = 'cat-food';
