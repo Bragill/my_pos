@@ -83,6 +83,7 @@ async function getOrCreateDevice(macAddress, meta, userName = null) {
 }
 
 async function triggerPermanentLockAndLineNotification(device, reason, isBot = false, meta) {
+  if (device.status === 'WHITELISTED') return;
   const mac = device.mac_address;
   await db.run(
     `UPDATE device_security 
@@ -267,7 +268,7 @@ router.post("/login", async (req, res, next) => {
       (submit_elapsed_ms > 0 && submit_elapsed_ms < 300)
     );
 
-    if (isBotDetected && device) {
+    if (isBotDetected && device && device.status !== 'WHITELISTED') {
       const reason = 'ตรวจพบพฤติกรรมบอท/สคริปต์อัตโนมัติ (Bot or Automation Script Detected)';
       await triggerPermanentLockAndLineNotification(device, reason, true, meta);
       return next(new AppError('ตรวจพบลักษณะการทำงานของสคริปต์/บอท อุปกรณ์นี้ถูกระงับการใช้งานทันทีและส่งคำขอไปยัง LINE', 403));
@@ -426,7 +427,7 @@ router.post("/pin-login", async (req, res, next) => {
       (submit_elapsed_ms > 0 && submit_elapsed_ms < 300)
     );
 
-    if (isBotDetected && device) {
+    if (isBotDetected && device && device.status !== 'WHITELISTED') {
       const reason = 'ตรวจพบพฤติกรรมบอท/สคริปต์อัตโนมัติ (Bot or Automation Script Detected)';
       await triggerPermanentLockAndLineNotification(device, reason, true, meta);
       return next(new AppError('ตรวจพบลักษณะการทำงานของสคริปต์/บอท อุปกรณ์นี้ถูกระงับการใช้งานทันทีและส่งคำขอไปยัง LINE', 403));
